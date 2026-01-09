@@ -1,6 +1,36 @@
 # ModelRelay CLI (mrl)
 
-A lightweight CLI that uses the Go SDK to run and test agents.
+A lightweight CLI for running and testing ModelRelay agents.
+
+## Installation
+
+### Homebrew (macOS/Linux)
+
+```bash
+brew install modelrelay/tap/mrl
+```
+
+To upgrade:
+
+```bash
+brew upgrade mrl
+```
+
+### Manual Download
+
+Download the latest release from [GitHub Releases](https://github.com/modelrelay/modelrelay/releases?q=mrl) and add to your PATH.
+
+### From Source
+
+```bash
+go install github.com/modelrelay/modelrelay/cmd/mrl@latest
+```
+
+Or build locally:
+
+```bash
+cd cmd/mrl && go build -o mrl
+```
 
 ## Setup
 
@@ -9,52 +39,68 @@ export MODELRELAY_API_KEY=mr_sk_...
 export MODELRELAY_PROJECT_ID=... # UUID
 ```
 
-## Run an agent
+## Commands
+
+### Run an agent
 
 ```bash
-go run ./cmd/mrl agent run researcher --input "Analyze Q4 sales"
+mrl agent run researcher --input "Analyze Q4 sales"
 ```
 
-## Test an agent with mocked tools
+### Test an agent with mocked tools
 
 ```bash
-go run ./cmd/mrl agent test researcher \
+mrl agent test researcher \
   --input "Analyze Q4 sales" \
   --mock-tools ./mocks.json \
   --trace
 ```
 
-## JSON input file
+### JSON input file
 
 ```bash
-go run ./cmd/mrl agent test researcher \
+mrl agent test researcher \
   --input-file ./inputs.json \
   --output ./trace.json \
   --json
 ```
 
-## List models
+### List models
 
 ```bash
-go run ./cmd/mrl models
+mrl models
 ```
 
 Filter by provider/capability and include deprecated:
 
 ```bash
-go run ./cmd/mrl models --provider openai --capability text_generation
-go run ./cmd/mrl models --include-deprecated --json
+mrl models --provider openai --capability text_generation
+mrl models --include-deprecated --json
 ```
 
-## Lint a JSON schema
+### Lint a JSON schema
 
 ```bash
-go run ./cmd/mrl schema lint ./schema.json
+mrl schema lint ./schema.json
 ```
 
 Validate provider compatibility:
 
 ```bash
-go run ./cmd/mrl schema lint ./schema.json --provider openai
-go run ./cmd/mrl schema lint ./tool-schema.json --provider openai --tool-schema
+mrl schema lint ./schema.json --provider openai
+mrl schema lint ./tool-schema.json --provider openai --tool-schema
 ```
+
+### Version
+
+```bash
+mrl --version
+```
+
+## Releasing
+
+To release a new version:
+
+1. Tag the release: `git tag mrl-v0.1.0 && git push origin mrl-v0.1.0`
+2. GitHub Actions builds and publishes the release
+3. Update Homebrew: `./scripts/update-homebrew-formula.sh 0.1.0`

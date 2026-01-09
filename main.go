@@ -23,10 +23,14 @@ import (
 	llm "github.com/modelrelay/modelrelay/sdk/go/llm"
 )
 
-const (
-	defaultClientHeader = "mrl/0.1"
-	defaultAPIBaseURL   = "https://api.modelrelay.ai/api/v1"
-)
+// version is set by -ldflags at build time
+var version = "dev"
+
+const defaultAPIBaseURL = "https://api.modelrelay.ai/api/v1"
+
+func clientHeader() string {
+	return "mrl/" + version
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -41,6 +45,8 @@ func main() {
 		runModels(os.Args[2:])
 	case "schema":
 		runSchema(os.Args[2:])
+	case "-v", "--version", "version":
+		fmt.Printf("mrl %s\n", version)
 	case "-h", "--help", "help":
 		printUsage()
 	default:
@@ -539,7 +545,7 @@ func newClient(cfg agentCLIConfig) (*sdk.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts := []sdk.Option{sdk.WithClientHeader(defaultClientHeader)}
+	opts := []sdk.Option{sdk.WithClientHeader(clientHeader())}
 	if strings.TrimSpace(cfg.baseURL) != "" {
 		opts = append(opts, sdk.WithBaseURL(cfg.baseURL))
 	}
