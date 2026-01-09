@@ -18,7 +18,7 @@ brew upgrade mrl
 
 ### Manual Download
 
-Download the latest release from [GitHub Releases](https://github.com/modelrelay/modelrelay/releases?q=mrl) and add to your PATH.
+Download the latest release from [releases.modelrelay.ai](https://releases.modelrelay.ai/mrl/) and add to your PATH.
 
 ### From Source
 
@@ -101,6 +101,8 @@ mrl --version
 
 To release a new version:
 
-1. Tag the release: `git tag mrl-v0.1.0 && git push origin mrl-v0.1.0`
-2. GitHub Actions builds and publishes the release
-3. Update Homebrew: `./scripts/update-homebrew-formula.sh 0.1.0`
+```bash
+git tag mrl-v0.2.0 && git push origin mrl-v0.2.0
+```
+
+The workflow automatically builds binaries, uploads to R2, and updates the Homebrew tap.
