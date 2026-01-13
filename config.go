@@ -14,10 +14,14 @@ type cliConfig struct {
 }
 
 type cliProfile struct {
-	APIKey    string `toml:"api_key,omitempty"`
-	BaseURL   string `toml:"base_url,omitempty"`
-	ProjectID string `toml:"project_id,omitempty"`
-	Output    string `toml:"output,omitempty"`
+	APIKey    string   `toml:"api_key,omitempty"`
+	BaseURL   string   `toml:"base_url,omitempty"`
+	ProjectID string   `toml:"project_id,omitempty"`
+	Output    string   `toml:"output,omitempty"`
+	Model     string   `toml:"model,omitempty"`
+	AllowAll  bool     `toml:"allow_all,omitempty"`
+	Allow     []string `toml:"allow,omitempty"`
+	Trace     bool     `toml:"trace,omitempty"`
 }
 
 func loadCLIConfig() (cliConfig, error) {
@@ -29,9 +33,14 @@ func loadCLIConfig() (cliConfig, error) {
 }
 
 func defaultConfigPath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
+	// Respect XDG_CONFIG_HOME if set, otherwise use ~/.config
+	dir := os.Getenv("XDG_CONFIG_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(home, ".config")
 	}
 	return filepath.Join(dir, "mrl", "config.toml"), nil
 }

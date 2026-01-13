@@ -10,13 +10,39 @@ import (
 const defaultAPIBaseURL = "https://api.modelrelay.ai/api/v1"
 
 func newRootCmd() *cobra.Command {
+	var model string
+	var system string
+	var stream bool
+	var usage bool
+
 	root := &cobra.Command{
-		Use:           "mrl",
-		Short:         "ModelRelay CLI",
+		Use:   "mrl [prompt]",
+		Short: "ModelRelay CLI",
+		Long: `ModelRelay CLI - chat with AI models.
+
+Examples:
+  mrl "What is 2 + 2?"
+  mrl "Write a haiku" --stream
+  mrl "Explain recursion" --model gpt-5.2 --usage
+  mrl config set --model claude-sonnet-4-5`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Args:          cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return cmd.Help()
+			}
+			return runPrompt(cmd, args, model, system, stream, usage)
+		},
 	}
 
+	// Prompt flags (on root command)
+	root.Flags().StringVar(&model, "model", "", "Model ID (overrides profile default)")
+	root.Flags().StringVar(&system, "system", "", "System prompt")
+	root.Flags().BoolVar(&stream, "stream", false, "Stream output as it's generated")
+	root.Flags().BoolVar(&usage, "usage", false, "Show token usage after response")
+
+	// Global flags
 	root.PersistentFlags().String("profile", "", "Config profile")
 	root.PersistentFlags().String("base-url", "", "API base URL override")
 	root.PersistentFlags().String("project", "", "Project UUID")
@@ -46,6 +72,7 @@ func newRootCmd() *cobra.Command {
 		newModelCmd(),
 		newSchemaCmd(),
 		newVersionCmd(),
+		newDoCmd(),
 	)
 
 	return root

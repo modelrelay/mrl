@@ -44,7 +44,11 @@ func newConfigShowCmd() *cobra.Command {
 				{Key: "api_key", Value: profileCfg.APIKey},
 				{Key: "base_url", Value: profileCfg.BaseURL},
 				{Key: "project_id", Value: profileCfg.ProjectID},
+				{Key: "model", Value: profileCfg.Model},
 				{Key: "output", Value: profileCfg.Output},
+				{Key: "allow_all", Value: fmt.Sprintf("%v", profileCfg.AllowAll)},
+				{Key: "allow", Value: strings.Join(profileCfg.Allow, ", ")},
+				{Key: "trace", Value: fmt.Sprintf("%v", profileCfg.Trace)},
 			}
 			printKeyValueTable(pairs)
 			return nil
@@ -59,7 +63,11 @@ func newConfigSetCmd() *cobra.Command {
 	var apiKey string
 	var baseURL string
 	var projectID string
+	var model string
 	var output string
+	var allowAll bool
+	var allow []string
+	var trace bool
 
 	cmd := &cobra.Command{
 		Use:   "set",
@@ -81,6 +89,9 @@ func newConfigSetCmd() *cobra.Command {
 			if cmd.Flags().Changed("project") {
 				profileCfg.ProjectID = strings.TrimSpace(projectID)
 			}
+			if cmd.Flags().Changed("model") {
+				profileCfg.Model = strings.TrimSpace(model)
+			}
 			if cmd.Flags().Changed("output") {
 				clean := strings.ToLower(strings.TrimSpace(output))
 				switch clean {
@@ -89,6 +100,15 @@ func newConfigSetCmd() *cobra.Command {
 				default:
 					return errors.New("output must be json or table")
 				}
+			}
+			if cmd.Flags().Changed("allow-all") {
+				profileCfg.AllowAll = allowAll
+			}
+			if cmd.Flags().Changed("allow") {
+				profileCfg.Allow = allow
+			}
+			if cmd.Flags().Changed("trace") {
+				profileCfg.Trace = trace
 			}
 
 			if cfg.Profiles == nil {
@@ -110,7 +130,11 @@ func newConfigSetCmd() *cobra.Command {
 	cmd.Flags().StringVar(&apiKey, "api-key", "", "API key")
 	cmd.Flags().StringVar(&baseURL, "base-url", "", "Base URL")
 	cmd.Flags().StringVar(&projectID, "project", "", "Project ID")
+	cmd.Flags().StringVar(&model, "model", "", "Default model")
 	cmd.Flags().StringVar(&output, "output", "", "Output format (json|table)")
+	cmd.Flags().BoolVar(&allowAll, "allow-all", false, "Allow all bash commands in 'do' command")
+	cmd.Flags().StringSliceVar(&allow, "allow", nil, "Allow bash command prefix in 'do' command (repeatable)")
+	cmd.Flags().BoolVar(&trace, "trace", false, "Show commands being executed in 'do' command")
 	return cmd
 }
 

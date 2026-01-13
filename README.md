@@ -1,8 +1,29 @@
 # ModelRelay CLI (mrl)
 
-A lightweight CLI for running and testing ModelRelay agents and managing resources.
+A lightweight CLI for chatting with AI models, running agents, and managing ModelRelay resources.
+
+📖 **[Full documentation](https://docs.modelrelay.ai/sdks/cli)**
 
 > **Note**: This repo is mirrored from [modelrelay/modelrelay](https://github.com/modelrelay/modelrelay) (monorepo). The monorepo is the source of truth. Submit issues and PRs there.
+
+## Quick Start
+
+```bash
+# Set your API key
+export MODELRELAY_API_KEY=mr_sk_...
+
+# Ask a question
+mrl "What is 2 + 2?"
+
+# Stream the response
+mrl "Write a haiku about coding" --stream
+
+# Show token usage
+mrl "Explain recursion" --usage
+
+# Use a specific model
+mrl "Hello" --model gpt-5.2
+```
 
 ## Installation
 
@@ -41,31 +62,100 @@ Environment variables:
 
 ```bash
 export MODELRELAY_API_KEY=mr_sk_...
-export MODELRELAY_PROJECT_ID=...    # UUID (optional default)
-export MODELRELAY_API_BASE_URL=...  # optional
+export MODELRELAY_MODEL=claude-sonnet-4-5  # default model
+export MODELRELAY_PROJECT_ID=...           # UUID (optional)
+export MODELRELAY_API_BASE_URL=...         # optional
 ```
 
 Config file (`~/.config/mrl/config.toml`):
 
 ```toml
-current_profile = "default"
-
 [profiles.default]
 api_key = "mr_sk_..."
+model = "claude-sonnet-4-5"
 base_url = "https://api.modelrelay.ai/api/v1"
 project_id = "<uuid>"
-output = "table" # or "json"
+output = "table"  # or "json"
+
+# Options for `mrl do` command
+allow_all = true
+trace = true
+# allow = ["git ", "npm "]  # alternative to allow_all
 ```
 
 Manage config with:
 
 ```bash
-mrl config set --profile dev --api-key mr_sk_...
-mrl config use dev
+mrl config set --api-key mr_sk_... --model claude-sonnet-4-5
+mrl config set --allow-all --trace  # enable for `mrl do`
+mrl config set --profile work --model gpt-5.2
+mrl config use work
 mrl config show
 ```
 
 ## Commands
+
+### Ask a question (default)
+
+The primary action—just pass a prompt directly:
+
+```bash
+mrl "What is the capital of France?"
+```
+
+Flags:
+
+| Flag | Description |
+|------|-------------|
+| `--model` | Override the default model |
+| `--system` | Set a system prompt |
+| `--stream` | Stream output as it's generated |
+| `--usage` | Show token usage after response |
+
+Examples:
+
+```bash
+mrl "Explain quantum computing in simple terms"
+mrl "Write a poem" --stream
+mrl "Summarize this" --system "Be concise" --usage
+mrl "Hello" --model gpt-5.2
+```
+
+### Execute a task with tools
+
+Run agentic tasks that can execute bash commands:
+
+```bash
+# With config: allow_all = true, trace = true
+mrl do "commit my changes"
+mrl do "run tests and fix failures"
+
+# Or with flags
+mrl do "show git status" --allow "git "
+mrl do "list all TODO comments" --allow "grep " --allow "find "
+mrl do "commit my changes" --allow-all --trace
+```
+
+Flags:
+
+| Flag | Description |
+|------|-------------|
+| `--allow` | Allow bash command prefix (repeatable) |
+| `--allow-all` | Allow all bash commands |
+| `--max-turns` | Max tool loop turns (default 50) |
+| `--trace` | Print commands as they execute |
+| `--model` | Override the default model |
+| `--system` | Set a system prompt |
+
+Config options (set with `mrl config set`):
+
+| Option | Description |
+|--------|-------------|
+| `--allow-all` | Allow all bash commands by default |
+| `--allow` | Default allowed command prefixes |
+| `--trace` | Show commands by default |
+
+By default, no commands are allowed. Use `--allow` to whitelist command prefixes, `--allow-all` to permit any command, or set these in your config.
 
 ### Run an agent
 
@@ -225,7 +315,7 @@ Table output is the default. Use `--json` for machine-readable output.
 To release a new version (from monorepo):
 
 ```bash
-git tag mrl-v0.2.0 && git push origin mrl-v0.2.0
+git tag mrl-v0.3.0 && git push origin mrl-v0.3.0
 ```
 
 The workflow automatically builds binaries, uploads to R2, and updates the Homebrew tap.

@@ -23,8 +23,12 @@ type runtimeConfig struct {
 	BaseURL   string
 	ProjectID string
 	APIKey    string
+	Model     string
 	Output    outputFormat
 	Timeout   time.Duration
+	AllowAll  bool
+	Allow     []string
+	Trace     bool
 }
 
 type runtimeConfigKey struct{}
@@ -63,6 +67,7 @@ func resolveRuntimeConfig(cmd *cobra.Command, cfgFile cliConfig) (runtimeConfig,
 
 	projectID := firstNonEmpty(projectFlag, os.Getenv("MODELRELAY_PROJECT_ID"), profile.ProjectID)
 	apiKey := firstNonEmpty(apiKeyFlag, os.Getenv("MODELRELAY_API_KEY"), os.Getenv("MODELRELAY_SECRET_KEY"), profile.APIKey)
+	model := firstNonEmpty(os.Getenv("MODELRELAY_MODEL"), profile.Model)
 
 	output, err := resolveOutputFormat(jsonFlag, profile.Output)
 	if err != nil {
@@ -79,8 +84,12 @@ func resolveRuntimeConfig(cmd *cobra.Command, cfgFile cliConfig) (runtimeConfig,
 		BaseURL:   strings.TrimSpace(baseURL),
 		ProjectID: strings.TrimSpace(projectID),
 		APIKey:    strings.TrimSpace(apiKey),
+		Model:     strings.TrimSpace(model),
 		Output:    output,
 		Timeout:   timeout,
+		AllowAll:  profile.AllowAll,
+		Allow:     profile.Allow,
+		Trace:     profile.Trace,
 	}, nil
 }
 

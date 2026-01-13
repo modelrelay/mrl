@@ -48,28 +48,9 @@ func TestJoinBaseURL(t *testing.T) {
 	}
 }
 
-func TestNormalizeBearer(t *testing.T) {
-	got := normalizeBearer("Bearer token")
-	if got != "token" {
-		t.Fatalf("expected token, got %s", got)
-	}
-	got = normalizeBearer("token")
-	if got != "token" {
-		t.Fatalf("expected token, got %s", got)
-	}
-}
-
-func TestApplyAuth(t *testing.T) {
-	cfg := runtimeConfig{Token: "token", APIKey: "mr_sk_test"}
+func TestApplyAuth_APIKey(t *testing.T) {
+	cfg := runtimeConfig{APIKey: "mr_sk_test"}
 	req, _ := http.NewRequest(http.MethodGet, "https://example.com", nil)
-	if err := applyAuth(req, cfg, authModeToken); err != nil {
-		t.Fatalf("apply token: %v", err)
-	}
-	if got := req.Header.Get("Authorization"); got != "Bearer token" {
-		t.Fatalf("expected bearer header, got %s", got)
-	}
-
-	req, _ = http.NewRequest(http.MethodGet, "https://example.com", nil)
 	if err := applyAuth(req, cfg, authModeAPIKey); err != nil {
 		t.Fatalf("apply api key: %v", err)
 	}
@@ -83,7 +64,6 @@ func TestResolveRuntimeConfig_Profile(t *testing.T) {
 	cmd.Flags().String("profile", "", "")
 	cmd.Flags().String("base-url", "", "")
 	cmd.Flags().String("project", "", "")
-	cmd.Flags().String("token", "", "")
 	cmd.Flags().String("api-key", "", "")
 	cmd.Flags().Bool("json", false, "")
 	cmd.Flags().Duration("timeout", 30, "")
