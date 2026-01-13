@@ -16,9 +16,7 @@ type authMode int
 
 const (
 	authModeNone authMode = iota
-	authModeToken
 	authModeAPIKey
-	authModeTokenOrAPIKey
 )
 
 func doJSON(ctx context.Context, cfg runtimeConfig, mode authMode, method, path string, payload any, out any) error {
@@ -83,39 +81,15 @@ func applyAuth(req *http.Request, cfg runtimeConfig, mode authMode) error {
 	switch mode {
 	case authModeNone:
 		return nil
-	case authModeToken:
-		if strings.TrimSpace(cfg.Token) == "" {
-			return errors.New("access token required")
-		}
-		req.Header.Set("Authorization", "Bearer "+normalizeBearer(cfg.Token))
 	case authModeAPIKey:
 		if strings.TrimSpace(cfg.APIKey) == "" {
 			return errors.New("api key required")
 		}
 		req.Header.Set("X-ModelRelay-Api-Key", strings.TrimSpace(cfg.APIKey))
-	case authModeTokenOrAPIKey:
-		if strings.TrimSpace(cfg.Token) != "" {
-			req.Header.Set("Authorization", "Bearer "+normalizeBearer(cfg.Token))
-			return nil
-		}
-		if strings.TrimSpace(cfg.APIKey) != "" {
-			req.Header.Set("X-ModelRelay-Api-Key", strings.TrimSpace(cfg.APIKey))
-			return nil
-		}
-		return errors.New("auth required")
 	default:
 		return errors.New("invalid auth mode")
 	}
 	return nil
-}
-
-func normalizeBearer(token string) string {
-	trimmed := strings.TrimSpace(token)
-	lower := strings.ToLower(trimmed)
-	if strings.HasPrefix(lower, "bearer ") {
-		return strings.TrimSpace(trimmed[len("bearer "):])
-	}
-	return trimmed
 }
 
 func joinBaseURL(baseURL, path string) (string, error) {

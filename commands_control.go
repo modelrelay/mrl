@@ -15,70 +15,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type projectListResponse struct {
-	Projects []generated.Project `json:"projects"`
-}
-
-type projectResponse struct {
-	Project generated.Project `json:"project"`
-}
-
-type apiKeyPayload struct {
-	ID          uuid.UUID  `json:"id"`
-	ProjectID   uuid.UUID  `json:"project_id"`
-	Label       string     `json:"label"`
-	Kind        string     `json:"kind"`
-	CreatedAt   time.Time  `json:"created_at"`
-	RedactedKey string     `json:"redacted_key"`
-	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
-	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
-	SecretKey   string     `json:"secret_key,omitempty"`
-}
-
-type apiKeyListResponse struct {
-	APIKeys []apiKeyPayload `json:"api_keys"`
-}
-
-type apiKeyResponse struct {
-	APIKey apiKeyPayload `json:"api_key"`
-}
-
 type customerListResponse struct {
 	Customers []generated.CustomerWithSubscription `json:"customers"`
-}
-
-type customerUsageSummary struct {
-	TotalRequests       int64  `json:"total_requests"`
-	TotalInputTokens    int64  `json:"total_input_tokens"`
-	TotalOutputTokens   int64  `json:"total_output_tokens"`
-	TotalImages         int64  `json:"total_images"`
-	TotalCostCents      int64  `json:"total_cost_cents"`
-	WalletBalanceCents  *int64 `json:"wallet_balance_cents,omitempty"`
-	WalletReservedCents *int64 `json:"wallet_reserved_cents,omitempty"`
-	OverageEnabled      *bool  `json:"overage_enabled,omitempty"`
-}
-
-type customerUsagePoint struct {
-	Day              time.Time `json:"day"`
-	Requests         int64     `json:"requests"`
-	Tokens           int64     `json:"tokens"`
-	Images           int64     `json:"images"`
-	CreditsUsedCents int64     `json:"credits_used_cents"`
-}
-
-type tierLimitInfo struct {
-	SpendLimitCents        int64     `json:"spend_limit_cents"`
-	CurrentPeriodCostCents int64     `json:"current_period_cost_cents"`
-	PercentageUsed         float64   `json:"percentage_used"`
-	IsNearLimit            bool      `json:"is_near_limit"`
-	WindowStart            time.Time `json:"window_start"`
-	WindowEnd              time.Time `json:"window_end"`
-}
-
-type customerUsageResponse struct {
-	Summary    customerUsageSummary `json:"summary"`
-	DailyUsage []customerUsagePoint `json:"daily_usage"`
-	TierLimit  *tierLimitInfo       `json:"tier_limit,omitempty"`
 }
 
 type usageSummary struct {
@@ -104,268 +42,6 @@ type tierResponse struct {
 	Tier generated.Tier `json:"tier"`
 }
 
-func newProjectCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "project",
-		Short: "Manage projects",
-	}
-	cmd.AddCommand(newProjectListCmd(), newProjectGetCmd(), newProjectCreateCmd())
-	return cmd
-}
-
-func newProjectListCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "list",
-		Short: "List projects",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := runtimeConfigFrom(cmd)
-			if err != nil {
-				return err
-			}
-			if strings.TrimSpace(cfg.Token) == "" {
-				return errors.New("access token required")
-			}
-			ctx, cancel := contextWithTimeout(cfg.Timeout)
-			defer cancel()
-
-			var resp projectListResponse
-			if err := doJSON(ctx, cfg, authModeToken, http.MethodGet, "/projects", nil, &resp); err != nil {
-				return err
-			}
-			return outputProjects(cfg, resp.Projects)
-		},
-	}
-}
-
-func newProjectGetCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "get <project-id>",
-		Short: "Get a project",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := runtimeConfigFrom(cmd)
-			if err != nil {
-				return err
-			}
-			if strings.TrimSpace(cfg.Token) == "" {
-				return errors.New("access token required")
-			}
-			projectID := strings.TrimSpace(args[0])
-			if _, err := uuid.Parse(projectID); err != nil {
-				return errors.New("invalid project id")
-			}
-
-			ctx, cancel := contextWithTimeout(cfg.Timeout)
-			defer cancel()
-
-			var resp projectResponse
-			path := fmt.Sprintf("/projects/%s", projectID)
-			if err := doJSON(ctx, cfg, authModeToken, http.MethodGet, path, nil, &resp); err != nil {
-				return err
-			}
-			return outputProject(cfg, resp.Project)
-		},
-	}
-}
-
-func newProjectCreateCmd() *cobra.Command {
-	var name string
-	var description string
-	var markup float64
-
-	cmd := &cobra.Command{
-		Use:   "create",
-		Short: "Create a project",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := runtimeConfigFrom(cmd)
-			if err != nil {
-				return err
-			}
-			if strings.TrimSpace(cfg.Token) == "" {
-				return errors.New("access token required")
-			}
-			cleanName := strings.TrimSpace(name)
-			if cleanName == "" {
-				return errors.New("project name is required")
-			}
-
-			payload := map[string]any{"name": cleanName}
-			if strings.TrimSpace(description) != "" {
-				payload["description"] = strings.TrimSpace(description)
-			}
-			if markup >= 0 {
-				payload["markup_percentage"] = markup
-			}
-
-			ctx, cancel := contextWithTimeout(cfg.Timeout)
-			defer cancel()
-
-			var resp projectResponse
-			if err := doJSON(ctx, cfg, authModeToken, http.MethodPost, "/projects", payload, &resp); err != nil {
-				return err
-			}
-			return outputProject(cfg, resp.Project)
-		},
-	}
-
-	cmd.Flags().StringVar(&name, "name", "", "Project name")
-	cmd.Flags().StringVar(&description, "description", "", "Project description")
-	cmd.Flags().Float64Var(&markup, "markup-percentage", -1, "Markup percentage (0-100)")
-
-	_ = cmd.MarkFlagRequired("name")
-
-	return cmd
-}
-
-func newKeyCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "key",
-		Short: "Manage API keys",
-	}
-	cmd.AddCommand(newKeyListCmd(), newKeyCreateCmd(), newKeyRevokeCmd())
-	return cmd
-}
-
-func newKeyListCmd() *cobra.Command {
-	var listAll bool
-	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List API keys",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := runtimeConfigFrom(cmd)
-			if err != nil {
-				return err
-			}
-			if strings.TrimSpace(cfg.Token) == "" {
-				return errors.New("access token required")
-			}
-
-			ctx, cancel := contextWithTimeout(cfg.Timeout)
-			defer cancel()
-
-			var resp apiKeyListResponse
-			if err := doJSON(ctx, cfg, authModeToken, http.MethodGet, "/api-keys", nil, &resp); err != nil {
-				return err
-			}
-
-			keys := resp.APIKeys
-			if !listAll && strings.TrimSpace(cfg.ProjectID) != "" {
-				projectID, err := uuid.Parse(cfg.ProjectID)
-				if err != nil {
-					return errors.New("invalid project id")
-				}
-				filtered := make([]apiKeyPayload, 0, len(keys))
-				for _, key := range keys {
-					if key.ProjectID == projectID {
-						filtered = append(filtered, key)
-					}
-				}
-				keys = filtered
-			}
-
-			if cfg.Output == outputFormatJSON {
-				printJSON(apiKeyListResponse{APIKeys: keys})
-				return nil
-			}
-			printKeysTable(keys)
-			return nil
-		},
-	}
-	cmd.Flags().BoolVar(&listAll, "all", false, "List all keys (ignore project filter)")
-	return cmd
-}
-
-func newKeyCreateCmd() *cobra.Command {
-	var name string
-	var kind string
-
-	cmd := &cobra.Command{
-		Use:   "create",
-		Short: "Create an API key",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := runtimeConfigFrom(cmd)
-			if err != nil {
-				return err
-			}
-			if strings.TrimSpace(cfg.Token) == "" {
-				return errors.New("access token required")
-			}
-			if strings.TrimSpace(cfg.ProjectID) == "" {
-				return errors.New("project id required")
-			}
-			if _, err := uuid.Parse(cfg.ProjectID); err != nil {
-				return errors.New("invalid project id")
-			}
-
-			cleanName := strings.TrimSpace(name)
-			if cleanName == "" {
-				return errors.New("key name is required")
-			}
-
-			payload := map[string]any{
-				"label":      cleanName,
-				"project_id": cfg.ProjectID,
-				"kind":       strings.TrimSpace(kind),
-			}
-
-			ctx, cancel := contextWithTimeout(cfg.Timeout)
-			defer cancel()
-
-			var resp apiKeyResponse
-			if err := doJSON(ctx, cfg, authModeToken, http.MethodPost, "/api-keys", payload, &resp); err != nil {
-				return err
-			}
-
-			if cfg.Output == outputFormatJSON {
-				printJSON(resp)
-				return nil
-			}
-			printKeyDetails(resp.APIKey)
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&name, "name", "", "Key label")
-	cmd.Flags().StringVar(&kind, "kind", "secret", "Key kind (secret, publishable)")
-	_ = cmd.MarkFlagRequired("name")
-	return cmd
-}
-
-func newKeyRevokeCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "revoke <key-id>",
-		Short: "Revoke an API key",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := runtimeConfigFrom(cmd)
-			if err != nil {
-				return err
-			}
-			if strings.TrimSpace(cfg.Token) == "" {
-				return errors.New("access token required")
-			}
-			keyID := strings.TrimSpace(args[0])
-			if _, err := uuid.Parse(keyID); err != nil {
-				return errors.New("invalid api key id")
-			}
-
-			ctx, cancel := contextWithTimeout(cfg.Timeout)
-			defer cancel()
-
-			path := fmt.Sprintf("/api-keys/%s", keyID)
-			if err := doJSON(ctx, cfg, authModeToken, http.MethodDelete, path, nil, nil); err != nil {
-				return err
-			}
-
-			if cfg.Output == outputFormatJSON {
-				printJSON(map[string]string{"revoked": keyID})
-				return nil
-			}
-			fmt.Printf("revoked %s\n", keyID)
-			return nil
-		},
-	}
-}
-
 func newCustomerCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "customer",
@@ -384,28 +60,16 @@ func newCustomerListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if strings.TrimSpace(cfg.APIKey) == "" {
+				return errors.New("api key required")
+			}
 
 			ctx, cancel := contextWithTimeout(cfg.Timeout)
 			defer cancel()
 
 			var resp customerListResponse
-			if strings.TrimSpace(cfg.Token) != "" {
-				if strings.TrimSpace(cfg.ProjectID) == "" {
-					return errors.New("project id required when using access token")
-				}
-				if _, err := uuid.Parse(cfg.ProjectID); err != nil {
-					return errors.New("invalid project id")
-				}
-				path := fmt.Sprintf("/projects/%s/customers", cfg.ProjectID)
-				if err := doJSON(ctx, cfg, authModeToken, http.MethodGet, path, nil, &resp); err != nil {
-					return err
-				}
-			} else if strings.TrimSpace(cfg.APIKey) != "" {
-				if err := doJSON(ctx, cfg, authModeAPIKey, http.MethodGet, "/customers", nil, &resp); err != nil {
-					return err
-				}
-			} else {
-				return errors.New("auth required")
+			if err := doJSON(ctx, cfg, authModeAPIKey, http.MethodGet, "/customers", nil, &resp); err != nil {
+				return err
 			}
 
 			if cfg.Output == outputFormatJSON {
@@ -428,6 +92,9 @@ func newCustomerGetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if strings.TrimSpace(cfg.APIKey) == "" {
+				return errors.New("api key required")
+			}
 			customerID := strings.TrimSpace(args[0])
 			if _, err := uuid.Parse(customerID); err != nil {
 				return errors.New("invalid customer id")
@@ -436,42 +103,14 @@ func newCustomerGetCmd() *cobra.Command {
 			ctx, cancel := contextWithTimeout(cfg.Timeout)
 			defer cancel()
 
-			var customer generated.CustomerWithSubscription
-			if strings.TrimSpace(cfg.APIKey) != "" {
-				path := fmt.Sprintf("/customers/%s", customerID)
-				body, err := doJSONRaw(ctx, cfg, authModeAPIKey, http.MethodGet, path, nil)
-				if err != nil {
-					return err
-				}
-				customer, err = decodeCustomer(body)
-				if err != nil {
-					return err
-				}
-			} else if strings.TrimSpace(cfg.Token) != "" {
-				if strings.TrimSpace(cfg.ProjectID) == "" {
-					return errors.New("project id required when using access token")
-				}
-				if _, err := uuid.Parse(cfg.ProjectID); err != nil {
-					return errors.New("invalid project id")
-				}
-				path := fmt.Sprintf("/projects/%s/customers", cfg.ProjectID)
-				var resp customerListResponse
-				if err := doJSON(ctx, cfg, authModeToken, http.MethodGet, path, nil, &resp); err != nil {
-					return err
-				}
-				found := false
-				for _, c := range resp.Customers {
-					if c.Customer.Id != nil && formatUUIDPtr(c.Customer.Id) == customerID {
-						customer = c
-						found = true
-						break
-					}
-				}
-				if !found {
-					return errors.New("customer not found")
-				}
-			} else {
-				return errors.New("auth required")
+			path := fmt.Sprintf("/customers/%s", customerID)
+			body, err := doJSONRaw(ctx, cfg, authModeAPIKey, http.MethodGet, path, nil)
+			if err != nil {
+				return err
+			}
+			customer, err := decodeCustomer(body)
+			if err != nil {
+				return err
 			}
 
 			if cfg.Output == outputFormatJSON {
@@ -496,6 +135,9 @@ func newCustomerCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if strings.TrimSpace(cfg.APIKey) == "" {
+				return errors.New("api key required")
+			}
 
 			cleanExternalID := strings.TrimSpace(externalID)
 			cleanEmail := strings.TrimSpace(email)
@@ -511,34 +153,13 @@ func newCustomerCreateCmd() *cobra.Command {
 			ctx, cancel := contextWithTimeout(cfg.Timeout)
 			defer cancel()
 
-			var customer generated.CustomerWithSubscription
-			if strings.TrimSpace(cfg.Token) != "" {
-				if strings.TrimSpace(cfg.ProjectID) == "" {
-					return errors.New("project id required when using access token")
-				}
-				if _, err := uuid.Parse(cfg.ProjectID); err != nil {
-					return errors.New("invalid project id")
-				}
-				path := fmt.Sprintf("/projects/%s/customers", cfg.ProjectID)
-				body, err := doJSONRaw(ctx, cfg, authModeToken, http.MethodPost, path, payload)
-				if err != nil {
-					return err
-				}
-				customer, err = decodeCustomer(body)
-				if err != nil {
-					return err
-				}
-			} else if strings.TrimSpace(cfg.APIKey) != "" {
-				body, err := doJSONRaw(ctx, cfg, authModeAPIKey, http.MethodPost, "/customers", payload)
-				if err != nil {
-					return err
-				}
-				customer, err = decodeCustomer(body)
-				if err != nil {
-					return err
-				}
-			} else {
-				return errors.New("auth required")
+			body, err := doJSONRaw(ctx, cfg, authModeAPIKey, http.MethodPost, "/customers", payload)
+			if err != nil {
+				return err
+			}
+			customer, err := decodeCustomer(body)
+			if err != nil {
+				return err
 			}
 
 			if cfg.Output == outputFormatJSON {
@@ -561,7 +182,7 @@ func newUsageCmd() *cobra.Command {
 		Use:   "usage",
 		Short: "Usage reporting",
 	}
-	cmd.AddCommand(newUsageAccountCmd(), newUsageCustomerCmd())
+	cmd.AddCommand(newUsageAccountCmd())
 	return cmd
 }
 
@@ -574,15 +195,15 @@ func newUsageAccountCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if strings.TrimSpace(cfg.Token) == "" && strings.TrimSpace(cfg.APIKey) == "" {
-				return errors.New("auth required")
+			if strings.TrimSpace(cfg.APIKey) == "" {
+				return errors.New("api key required")
 			}
 
 			ctx, cancel := contextWithTimeout(cfg.Timeout)
 			defer cancel()
 
 			var resp usageSummaryResponse
-			if err := doJSON(ctx, cfg, authModeTokenOrAPIKey, http.MethodGet, "/llm/usage", nil, &resp); err != nil {
+			if err := doJSON(ctx, cfg, authModeAPIKey, http.MethodGet, "/llm/usage", nil, &resp); err != nil {
 				return err
 			}
 
@@ -591,49 +212,6 @@ func newUsageAccountCmd() *cobra.Command {
 				return nil
 			}
 			printUsageSummaryDetails(resp.Summary)
-			return nil
-		},
-	}
-}
-
-func newUsageCustomerCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "customer <customer-id>",
-		Short: "Show customer usage within a project",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := runtimeConfigFrom(cmd)
-			if err != nil {
-				return err
-			}
-			if strings.TrimSpace(cfg.Token) == "" {
-				return errors.New("access token required")
-			}
-			if strings.TrimSpace(cfg.ProjectID) == "" {
-				return errors.New("project id required")
-			}
-			if _, err := uuid.Parse(cfg.ProjectID); err != nil {
-				return errors.New("invalid project id")
-			}
-			customerID := strings.TrimSpace(args[0])
-			if _, err := uuid.Parse(customerID); err != nil {
-				return errors.New("invalid customer id")
-			}
-
-			ctx, cancel := contextWithTimeout(cfg.Timeout)
-			defer cancel()
-
-			path := fmt.Sprintf("/projects/%s/customers/%s/usage", cfg.ProjectID, customerID)
-			var resp customerUsageResponse
-			if err := doJSON(ctx, cfg, authModeToken, http.MethodGet, path, nil, &resp); err != nil {
-				return err
-			}
-
-			if cfg.Output == outputFormatJSON {
-				printJSON(resp)
-				return nil
-			}
-			printCustomerUsageDetails(resp)
 			return nil
 		},
 	}
@@ -657,28 +235,16 @@ func newTierListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if strings.TrimSpace(cfg.APIKey) == "" {
+				return errors.New("api key required")
+			}
 
 			ctx, cancel := contextWithTimeout(cfg.Timeout)
 			defer cancel()
 
 			var resp tierListResponse
-			if strings.TrimSpace(cfg.Token) != "" {
-				if strings.TrimSpace(cfg.ProjectID) == "" {
-					return errors.New("project id required when using access token")
-				}
-				if _, err := uuid.Parse(cfg.ProjectID); err != nil {
-					return errors.New("invalid project id")
-				}
-				path := fmt.Sprintf("/projects/%s/tiers", cfg.ProjectID)
-				if err := doJSON(ctx, cfg, authModeToken, http.MethodGet, path, nil, &resp); err != nil {
-					return err
-				}
-			} else if strings.TrimSpace(cfg.APIKey) != "" {
-				if err := doJSON(ctx, cfg, authModeAPIKey, http.MethodGet, "/tiers", nil, &resp); err != nil {
-					return err
-				}
-			} else {
-				return errors.New("auth required")
+			if err := doJSON(ctx, cfg, authModeAPIKey, http.MethodGet, "/tiers", nil, &resp); err != nil {
+				return err
 			}
 
 			if cfg.Output == outputFormatJSON {
@@ -701,6 +267,9 @@ func newTierGetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if strings.TrimSpace(cfg.APIKey) == "" {
+				return errors.New("api key required")
+			}
 			tierID := strings.TrimSpace(args[0])
 			if _, err := uuid.Parse(tierID); err != nil {
 				return errors.New("invalid tier id")
@@ -710,24 +279,9 @@ func newTierGetCmd() *cobra.Command {
 			defer cancel()
 
 			var resp tierResponse
-			if strings.TrimSpace(cfg.Token) != "" {
-				if strings.TrimSpace(cfg.ProjectID) == "" {
-					return errors.New("project id required when using access token")
-				}
-				if _, err := uuid.Parse(cfg.ProjectID); err != nil {
-					return errors.New("invalid project id")
-				}
-				path := fmt.Sprintf("/projects/%s/tiers/%s", cfg.ProjectID, tierID)
-				if err := doJSON(ctx, cfg, authModeToken, http.MethodGet, path, nil, &resp); err != nil {
-					return err
-				}
-			} else if strings.TrimSpace(cfg.APIKey) != "" {
-				path := fmt.Sprintf("/tiers/%s", tierID)
-				if err := doJSON(ctx, cfg, authModeAPIKey, http.MethodGet, path, nil, &resp); err != nil {
-					return err
-				}
-			} else {
-				return errors.New("auth required")
+			path := fmt.Sprintf("/tiers/%s", tierID)
+			if err := doJSON(ctx, cfg, authModeAPIKey, http.MethodGet, path, nil, &resp); err != nil {
+				return err
 			}
 
 			if cfg.Output == outputFormatJSON {
@@ -761,73 +315,6 @@ func decodeCustomer(body []byte) (generated.CustomerWithSubscription, error) {
 
 func customerHasData(customer generated.Customer) bool {
 	return customer.Id != nil || customer.ExternalId != nil || customer.Email != nil
-}
-
-func outputProjects(cfg runtimeConfig, projects []generated.Project) error {
-	if cfg.Output == outputFormatJSON {
-		printJSON(projectListResponse{Projects: projects})
-		return nil
-	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tNAME\tBILLING_MODE\tMARKUP\tCREATED_AT")
-	for _, project := range projects {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			formatUUIDPtr(project.Id),
-			stringOrEmpty(project.Name),
-			stringOrEmpty(project.BillingMode),
-			formatFloat32(project.MarkupPercentage),
-			formatTime(project.CreatedAt),
-		)
-	}
-	_ = w.Flush()
-	return nil
-}
-
-func outputProject(cfg runtimeConfig, project generated.Project) error {
-	if cfg.Output == outputFormatJSON {
-		printJSON(projectResponse{Project: project})
-		return nil
-	}
-	pairs := []kvPair{
-		{Key: "id", Value: formatUUIDPtr(project.Id)},
-		{Key: "name", Value: stringOrEmpty(project.Name)},
-		{Key: "billing_mode", Value: stringOrEmpty(project.BillingMode)},
-		{Key: "markup_percentage", Value: formatFloat32(project.MarkupPercentage)},
-		{Key: "created_at", Value: formatTime(project.CreatedAt)},
-		{Key: "updated_at", Value: formatTime(project.UpdatedAt)},
-	}
-	printKeyValueTable(pairs)
-	return nil
-}
-
-func printKeysTable(keys []apiKeyPayload) {
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tLABEL\tKIND\tPROJECT_ID\tCREATED_AT\tLAST_USED")
-	for _, key := range keys {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			key.ID.String(),
-			key.Label,
-			key.Kind,
-			key.ProjectID.String(),
-			formatTime(&key.CreatedAt),
-			formatTime(key.LastUsedAt),
-		)
-	}
-	_ = w.Flush()
-}
-
-func printKeyDetails(key apiKeyPayload) {
-	pairs := []kvPair{
-		{Key: "id", Value: key.ID.String()},
-		{Key: "label", Value: key.Label},
-		{Key: "kind", Value: key.Kind},
-		{Key: "project_id", Value: key.ProjectID.String()},
-		{Key: "created_at", Value: formatTime(&key.CreatedAt)},
-		{Key: "last_used_at", Value: formatTime(key.LastUsedAt)},
-		{Key: "redacted_key", Value: key.RedactedKey},
-		{Key: "secret_key", Value: key.SecretKey},
-	}
-	printKeyValueTable(pairs)
 }
 
 func printCustomersTable(customers []generated.CustomerWithSubscription) {
@@ -872,34 +359,6 @@ func printCustomerDetails(customer generated.CustomerWithSubscription) {
 		if customer.Subscription.SubscriptionStatus != nil {
 			pairs = append(pairs, kvPair{Key: "subscription_status", Value: string(*customer.Subscription.SubscriptionStatus)})
 		}
-	}
-	printKeyValueTable(pairs)
-}
-
-func printCustomerUsageDetails(resp customerUsageResponse) {
-	pairs := []kvPair{
-		{Key: "total_requests", Value: fmt.Sprintf("%d", resp.Summary.TotalRequests)},
-		{Key: "total_input_tokens", Value: fmt.Sprintf("%d", resp.Summary.TotalInputTokens)},
-		{Key: "total_output_tokens", Value: fmt.Sprintf("%d", resp.Summary.TotalOutputTokens)},
-		{Key: "total_images", Value: fmt.Sprintf("%d", resp.Summary.TotalImages)},
-		{Key: "total_cost_cents", Value: fmt.Sprintf("%d", resp.Summary.TotalCostCents)},
-	}
-	if resp.Summary.WalletBalanceCents != nil {
-		pairs = append(pairs, kvPair{Key: "wallet_balance_cents", Value: fmt.Sprintf("%d", *resp.Summary.WalletBalanceCents)})
-	}
-	if resp.Summary.WalletReservedCents != nil {
-		pairs = append(pairs, kvPair{Key: "wallet_reserved_cents", Value: fmt.Sprintf("%d", *resp.Summary.WalletReservedCents)})
-	}
-	if resp.Summary.OverageEnabled != nil {
-		pairs = append(pairs, kvPair{Key: "overage_enabled", Value: fmt.Sprintf("%t", *resp.Summary.OverageEnabled)})
-	}
-	if resp.TierLimit != nil {
-		pairs = append(pairs,
-			kvPair{Key: "tier_spend_limit_cents", Value: fmt.Sprintf("%d", resp.TierLimit.SpendLimitCents)},
-			kvPair{Key: "tier_current_period_cost_cents", Value: fmt.Sprintf("%d", resp.TierLimit.CurrentPeriodCostCents)},
-			kvPair{Key: "tier_percentage_used", Value: fmt.Sprintf("%.2f", resp.TierLimit.PercentageUsed)},
-			kvPair{Key: "tier_is_near_limit", Value: fmt.Sprintf("%t", resp.TierLimit.IsNearLimit)},
-		)
 	}
 	printKeyValueTable(pairs)
 }

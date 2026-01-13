@@ -118,7 +118,7 @@ func runAgentLoop(cmd *cobra.Command, args []string, flags *agentLoopFlags) erro
 		return errors.New("model is required unless --customer is set")
 	}
 
-	client, err := newAgentClient(cfg, true)
+	client, err := newAgentClient(cfg)
 	if err != nil {
 		return err
 	}

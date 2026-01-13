@@ -5,20 +5,19 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/BurntSushi/toml"
 )
 
 type cliConfig struct {
-	CurrentProfile string                `yaml:"current_profile,omitempty"`
-	Profiles       map[string]cliProfile `yaml:"profiles,omitempty"`
+	CurrentProfile string                `toml:"current_profile,omitempty"`
+	Profiles       map[string]cliProfile `toml:"profiles,omitempty"`
 }
 
 type cliProfile struct {
-	APIKey    string `yaml:"api_key,omitempty"`
-	Token     string `yaml:"token,omitempty"`
-	BaseURL   string `yaml:"base_url,omitempty"`
-	ProjectID string `yaml:"project_id,omitempty"`
-	Output    string `yaml:"output,omitempty"`
+	APIKey    string `toml:"api_key,omitempty"`
+	BaseURL   string `toml:"base_url,omitempty"`
+	ProjectID string `toml:"project_id,omitempty"`
+	Output    string `toml:"output,omitempty"`
 }
 
 func loadCLIConfig() (cliConfig, error) {
@@ -34,7 +33,7 @@ func defaultConfigPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "modelrelay", "config.yaml"), nil
+	return filepath.Join(dir, "mrl", "config.toml"), nil
 }
 
 func readCLIConfig(path string) (cliConfig, error) {
@@ -52,7 +51,7 @@ func readCLIConfig(path string) (cliConfig, error) {
 		return cliConfig{}, nil
 	}
 	var cfg cliConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	if _, err := toml.Decode(string(data), &cfg); err != nil {
 		return cliConfig{}, err
 	}
 	if cfg.Profiles == nil {
@@ -69,14 +68,15 @@ func writeCLIConfig(cfg cliConfig) error {
 	if cfg.Profiles == nil {
 		cfg.Profiles = map[string]cliProfile{}
 	}
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return err
-	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(cfg)
 }
 
 func resolveProfileName(flagValue string, cfg cliConfig) string {

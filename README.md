@@ -2,6 +2,8 @@
 
 A lightweight CLI for running and testing ModelRelay agents and managing resources.
 
+> **Note**: This repo is mirrored from [modelrelay/modelrelay](https://github.com/modelrelay/modelrelay) (monorepo). The monorepo is the source of truth. Submit issues and PRs there.
+
 ## Installation
 
 ### Homebrew (macOS/Linux)
@@ -23,13 +25,14 @@ Download the latest release from [releases.modelrelay.ai](https://releases.model
 ### From Source
 
 ```bash
-go install github.com/modelrelay/modelrelay/cmd/mrl@latest
+go install github.com/modelrelay/mrl@latest
 ```
 
 Or build locally:
 
 ```bash
-cd cmd/mrl && go build -o mrl
+git clone https://github.com/modelrelay/mrl.git
+cd mrl && go build -o mrl
 ```
 
 ## Setup
@@ -38,28 +41,26 @@ Environment variables:
 
 ```bash
 export MODELRELAY_API_KEY=mr_sk_...
-export MODELRELAY_ACCESS_TOKEN=... # bearer token for control-plane commands
 export MODELRELAY_PROJECT_ID=...    # UUID (optional default)
 export MODELRELAY_API_BASE_URL=...  # optional
 ```
 
-Config file (`~/.config/modelrelay/config.yaml`):
+Config file (`~/.config/mrl/config.toml`):
 
-```yaml
-current_profile: default
-profiles:
-  default:
-    api_key: mr_sk_...
-    token: <bearer token>
-    base_url: https://api.modelrelay.ai/api/v1
-    project_id: <uuid>
-    output: table # or json
+```toml
+current_profile = "default"
+
+[profiles.default]
+api_key = "mr_sk_..."
+base_url = "https://api.modelrelay.ai/api/v1"
+project_id = "<uuid>"
+output = "table" # or "json"
 ```
 
 Manage config with:
 
 ```bash
-mrl config set --profile dev --token <bearer> --api-key mr_sk_...
+mrl config set --profile dev --api-key mr_sk_...
 mrl config use dev
 mrl config show
 ```
@@ -192,44 +193,27 @@ mrl schema lint ./tool-schema.json --provider openai --tool-schema
 mrl version
 ```
 
-## Control-Plane Commands
-
-### Projects
-
-```bash
-mrl project list --token $MODELRELAY_ACCESS_TOKEN
-mrl project get <project_id> --token $MODELRELAY_ACCESS_TOKEN
-mrl project create --name "My Project" --token $MODELRELAY_ACCESS_TOKEN
-```
-
-### API Keys
-
-```bash
-mrl key list --token $MODELRELAY_ACCESS_TOKEN
-mrl key create --name "ci-key" --project <project_id> --token $MODELRELAY_ACCESS_TOKEN
-mrl key revoke <key_id> --token $MODELRELAY_ACCESS_TOKEN
-```
+## Resource Commands
 
 ### Customers
 
 ```bash
-mrl customer list --project <project_id> --token $MODELRELAY_ACCESS_TOKEN
-mrl customer get <customer_id> --api-key $MODELRELAY_API_KEY
-mrl customer create --project <project_id> --external-id user_123 --email user@example.com --token $MODELRELAY_ACCESS_TOKEN
+mrl customer list
+mrl customer get <customer_id>
+mrl customer create --external-id user_123 --email user@example.com
 ```
 
 ### Usage
 
 ```bash
-mrl usage account --api-key $MODELRELAY_API_KEY
-mrl usage customer <customer_id> --project <project_id> --token $MODELRELAY_ACCESS_TOKEN
+mrl usage account
 ```
 
 ### Tiers
 
 ```bash
-mrl tier list --project <project_id> --token $MODELRELAY_ACCESS_TOKEN
-mrl tier get <tier_id> --project <project_id> --token $MODELRELAY_ACCESS_TOKEN
+mrl tier list
+mrl tier get <tier_id>
 ```
 
 ## Output
@@ -238,10 +222,16 @@ Table output is the default. Use `--json` for machine-readable output.
 
 ## Releasing
 
-To release a new version:
+To release a new version (from monorepo):
 
 ```bash
 git tag mrl-v0.2.0 && git push origin mrl-v0.2.0
 ```
 
 The workflow automatically builds binaries, uploads to R2, and updates the Homebrew tap.
+
+To sync this standalone repo after changes (from monorepo):
+
+```bash
+just cli-push-mrl
+```

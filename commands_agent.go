@@ -49,7 +49,7 @@ func newAgentRunCmd() *cobra.Command {
 		Short: "Run an agent",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAgent(cmd, args[0], flags, true)
+			return runAgent(cmd, args[0], flags, false)
 		},
 	}
 	bindAgentFlags(cmd, flags, false)
@@ -64,7 +64,7 @@ func newAgentTestCmd() *cobra.Command {
 		Short: "Test an agent with mocked tools",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAgent(cmd, args[0], flags, false)
+			return runAgent(cmd, args[0], flags, true)
 		},
 	}
 	bindAgentFlags(cmd, flags, true)
@@ -89,7 +89,7 @@ func bindAgentFlags(cmd *cobra.Command, flags *agentFlags, includeMock bool) {
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false, "Error if a tool is not mocked")
 }
 
-func runAgent(cmd *cobra.Command, slug string, flags *agentFlags, allowAPIKey bool) error {
+func runAgent(cmd *cobra.Command, slug string, flags *agentFlags, useTestEndpoint bool) error {
 	cfg, err := runtimeConfigFrom(cmd)
 	if err != nil {
 		return err
@@ -102,7 +102,7 @@ func runAgent(cmd *cobra.Command, slug string, flags *agentFlags, allowAPIKey bo
 		return errors.New("invalid project id")
 	}
 
-	client, err := newAgentClient(cfg, allowAPIKey)
+	client, err := newAgentClient(cfg)
 	if err != nil {
 		return err
 	}
@@ -117,56 +117,49 @@ func runAgent(cmd *cobra.Command, slug string, flags *agentFlags, allowAPIKey bo
 	ctx, cancel := contextWithTimeout(cfg.Timeout)
 	defer cancel()
 
-	if allowAPIKey {
-		req := sdk.AgentRunRequest{
-			Input:      input,
-			Options:    options,
-			CustomerID: optionalString(flags.customerID),
+	if useTestEndpoint {
+		mockTools, err := readMockTools(flags.mockToolsPath)
+		if err != nil {
+			return err
 		}
-		resp, err := client.Agents.Run(ctx, projectID, slug, req)
+		req := sdk.AgentTestRequest{
+			Input:     input,
+			MockTools: mockTools,
+			Options:   options,
+		}
+		resp, err := client.Agents.Test(ctx, projectID, slug, req)
 		if err != nil {
 			return err
 		}
 		return handleAgentResponse(cfg, resp, flags)
 	}
 
-	mockTools, err := readMockTools(flags.mockToolsPath)
-	if err != nil {
-		return err
+	req := sdk.AgentRunRequest{
+		Input:      input,
+		Options:    options,
+		CustomerID: optionalString(flags.customerID),
 	}
-	req := sdk.AgentTestRequest{
-		Input:     input,
-		MockTools: mockTools,
-		Options:   options,
-	}
-	resp, err := client.Agents.Test(ctx, projectID, slug, req)
+	resp, err := client.Agents.Run(ctx, projectID, slug, req)
 	if err != nil {
 		return err
 	}
 	return handleAgentResponse(cfg, resp, flags)
 }
 
-func newAgentClient(cfg runtimeConfig, allowAPIKey bool) (*sdk.Client, error) {
+func newAgentClient(cfg runtimeConfig) (*sdk.Client, error) {
 	opts := []sdk.Option{sdk.WithClientHeader(clientHeader())}
 	if strings.TrimSpace(cfg.BaseURL) != "" {
 		opts = append(opts, sdk.WithBaseURL(cfg.BaseURL))
 	}
 
-	if strings.TrimSpace(cfg.Token) != "" {
-		return sdk.NewClientWithToken(normalizeBearer(cfg.Token), opts...)
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		return nil, errors.New("api key required")
 	}
-	if allowAPIKey && strings.TrimSpace(cfg.APIKey) != "" {
-		key, err := sdk.ParseAPIKeyAuth(cfg.APIKey)
-		if err != nil {
-			return nil, err
-		}
-		return sdk.NewClientWithKey(key, opts...)
+	key, err := sdk.ParseAPIKeyAuth(cfg.APIKey)
+	if err != nil {
+		return nil, err
 	}
-
-	if allowAPIKey {
-		return nil, errors.New("access token or api key required")
-	}
-	return nil, errors.New("access token required")
+	return sdk.NewClientWithKey(key, opts...)
 }
 
 func buildAgentOptions(flags *agentFlags, flagset *pflag.FlagSet) *sdk.AgentRunOptions {

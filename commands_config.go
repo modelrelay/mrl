@@ -41,7 +41,6 @@ func newConfigShowCmd() *cobra.Command {
 			pairs := []kvPair{
 				{Key: "profile", Value: profileName},
 				{Key: "current_profile", Value: cfg.CurrentProfile},
-				{Key: "token", Value: profileCfg.Token},
 				{Key: "api_key", Value: profileCfg.APIKey},
 				{Key: "base_url", Value: profileCfg.BaseURL},
 				{Key: "project_id", Value: profileCfg.ProjectID},
@@ -57,7 +56,6 @@ func newConfigShowCmd() *cobra.Command {
 
 func newConfigSetCmd() *cobra.Command {
 	var profile string
-	var token string
 	var apiKey string
 	var baseURL string
 	var projectID string
@@ -74,9 +72,6 @@ func newConfigSetCmd() *cobra.Command {
 			profileName := resolveProfileName(profile, cfg)
 			profileCfg := profileFor(cfg, profileName)
 
-			if cmd.Flags().Changed("token") {
-				profileCfg.Token = strings.TrimSpace(token)
-			}
 			if cmd.Flags().Changed("api-key") {
 				profileCfg.APIKey = strings.TrimSpace(apiKey)
 			}
@@ -112,7 +107,6 @@ func newConfigSetCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&profile, "profile", "", "Profile name")
-	cmd.Flags().StringVar(&token, "token", "", "Access token")
 	cmd.Flags().StringVar(&apiKey, "api-key", "", "API key")
 	cmd.Flags().StringVar(&baseURL, "base-url", "", "Base URL")
 	cmd.Flags().StringVar(&projectID, "project", "", "Project ID")
