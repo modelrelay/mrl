@@ -4,8 +4,6 @@ A lightweight CLI for chatting with AI models, running agents, and managing Mode
 
 📖 **[Full documentation](https://docs.modelrelay.ai/sdks/cli)**
 
-> **Note**: This repo is mirrored from [modelrelay/modelrelay](https://github.com/modelrelay/modelrelay) (monorepo). The monorepo is the source of truth. Submit issues and PRs there.
-
 ## Quick Start
 
 ```bash
@@ -309,19 +307,3 @@ mrl tier get <tier_id>
 ## Output
 
 Table output is the default. Use `--json` for machine-readable output.
-
-## Releasing
-
-To release a new version (from monorepo):
-
-```bash
-git tag mrl-v0.3.0 && git push origin mrl-v0.3.0
-```
-
-The workflow automatically builds binaries, uploads to R2, and updates the Homebrew tap.
-
-To sync this standalone repo after changes (from monorepo):
-
-```bash
-just cli-push-mrl
-```
