@@ -103,6 +103,16 @@ func joinBaseURL(baseURL, path string) (string, error) {
 	if u.Path == "" {
 		u.Path = "/"
 	}
-	u.Path = strings.TrimRight(u.Path, "/") + path
+	// Separate path and query string to avoid encoding the query string
+	pathPart := path
+	queryPart := ""
+	if idx := strings.Index(path, "?"); idx >= 0 {
+		pathPart = path[:idx]
+		queryPart = path[idx+1:]
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + pathPart
+	if queryPart != "" {
+		u.RawQuery = queryPart
+	}
 	return u.String(), nil
 }

@@ -38,13 +38,35 @@ func TestResolveOutputFormat(t *testing.T) {
 }
 
 func TestJoinBaseURL(t *testing.T) {
-	got, err := joinBaseURL("https://api.modelrelay.ai/api/v1", "/projects")
-	if err != nil {
-		t.Fatalf("joinBaseURL error: %v", err)
+	tests := []struct {
+		base string
+		path string
+		want string
+	}{
+		{
+			base: "https://api.modelrelay.ai/api/v1",
+			path: "/projects",
+			want: "https://api.modelrelay.ai/api/v1/projects",
+		},
+		{
+			base: "https://api.modelrelay.ai/api/v1",
+			path: "/models?capability=text_generation",
+			want: "https://api.modelrelay.ai/api/v1/models?capability=text_generation",
+		},
+		{
+			base: "https://api.modelrelay.ai/api/v1/",
+			path: "/models?provider=openai&capability=tools",
+			want: "https://api.modelrelay.ai/api/v1/models?provider=openai&capability=tools",
+		},
 	}
-	want := "https://api.modelrelay.ai/api/v1/projects"
-	if got != want {
-		t.Fatalf("expected %s, got %s", want, got)
+	for _, tc := range tests {
+		got, err := joinBaseURL(tc.base, tc.path)
+		if err != nil {
+			t.Fatalf("joinBaseURL(%q, %q) error: %v", tc.base, tc.path, err)
+		}
+		if got != tc.want {
+			t.Errorf("joinBaseURL(%q, %q) = %q, want %q", tc.base, tc.path, got, tc.want)
+		}
 	}
 }
 
