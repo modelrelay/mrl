@@ -193,13 +193,13 @@ mrl agent loop \
   --input "List recent commits and summarize them"
 ```
 
-Include `tasks.write` for progress tracking (state handle optional):
+Include `tasks_write` for progress tracking (state handle optional):
 
 ```bash
 mrl agent loop \
   --model claude-sonnet-4-5 \
   --tool bash \
-  --tool tasks.write \
+  --tool tasks_write \
   --state-ttl-sec 86400 \
   --tasks-output ./tasks.json \
   --input "Audit this repo and track your progress"
@@ -222,7 +222,7 @@ You can load tools from a manifest file. The format is chosen by file extension 
 
 ```toml
 tool_root = "."
-tools = ["bash", "tasks.write"]
+tools = ["bash", "tasks_write"]
 state_ttl_sec = 86400
 
 [bash]

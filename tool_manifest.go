@@ -157,7 +157,7 @@ func (m toolManifest) inferredTools() []string {
 		out = append(out, "bash")
 	}
 	if m.TasksWrite != nil {
-		out = append(out, "tasks.write")
+		out = append(out, "tasks_write")
 	}
 	if m.FS != nil {
 		out = append(out, "fs")

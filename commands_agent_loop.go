@@ -18,7 +18,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const toolNameTasksWrite sdk.ToolName = "tasks.write"
+const toolNameTasksWrite sdk.ToolName = "tasks_write"
 
 type agentLoopFlags struct {
 	inputText       string
@@ -336,14 +336,14 @@ func parseLoopTools(values []string, allowEmpty bool) (loopToolSelection, error)
 		switch strings.ToLower(strings.TrimSpace(raw)) {
 		case "bash":
 			sel.enableBash = true
-		case "tasks.write", "task.write", "tasks":
+		case "tasks_write", "tasks.write", "task.write", "tasks":
 			sel.enableTasks = true
 		case "fs":
 			sel.enableFS = true
 		case "":
 			continue
 		default:
-			return loopToolSelection{}, fmt.Errorf("unknown tool %q (supported: bash, tasks.write, fs)", raw)
+			return loopToolSelection{}, fmt.Errorf("unknown tool %q (supported: bash, tasks_write, fs)", raw)
 		}
 	}
 	return sel, nil

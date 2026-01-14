@@ -14,7 +14,7 @@ func TestLoadToolManifestTOML(t *testing.T) {
 	path := filepath.Join(dir, "tools.toml")
 	content := `
 tool_root = "."
-	tools = ["bash", "tasks.write", "fs"]
+	tools = ["bash", "tasks_write", "fs"]
 state_id = "550e8400-e29b-41d4-a716-446655440000"
 state_ttl_sec = 3600
 
@@ -104,7 +104,7 @@ func TestApplyToolManifest(t *testing.T) {
 	ttl := int64(7200)
 	manifest := toolManifest{
 		ToolRoot:        "/tmp",
-		Tools:           []string{"bash", "tasks.write"},
+		Tools:           []string{"bash", "tasks_write"},
 		StateTTLSeconds: &ttl,
 		Bash: &toolManifestBash{
 			Allow:          []string{"git "},
