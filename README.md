@@ -23,6 +23,10 @@ mrl "Explain recursion" --usage
 
 # Use a specific model
 mrl "Hello" --model gpt-5.2
+
+# Pipe text content into the prompt
+cat README.md | mrl "summarize this"
+echo "What is the capital of France?" | mrl
 ```
 
 ## Installation
@@ -115,7 +119,7 @@ Flags:
 | `--attachment-type` | Override attachment MIME type |
 | `--attach-stdin` | Attach stdin as a file (requires piping data) |
 
-If stdin is piped and `--attachment-type` is set, the CLI auto-attaches stdin even without `-a -`.
+When stdin is piped without attachment flags, it's automatically read as text and combined with the prompt. Use attachment flags (`-a`, `--attachment-type`, `--attach-stdin`) for binary files.
 
 Examples:
 
@@ -123,6 +127,13 @@ Examples:
 mrl "Explain quantum computing in simple terms"
 mrl "Write a poem" --stream
 mrl "Summarize this" --system "Be concise" --usage
+
+# Pipe text content (auto-detected)
+cat README.md | mrl "summarize this"
+echo "What is 2+2?" | mrl
+git diff | mrl "explain these changes"
+
+# Attach files
 mrl "Summarize this PDF" -a report.pdf
 cat notes.pdf | mrl "Extract tables" -a - --attachment-type application/pdf
 cat notes.pdf | mrl "Extract tables" --attachment-type application/pdf
