@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -35,17 +36,45 @@ func runPrompt(cmd *cobra.Command, args []string, modelFlag, system string, atta
 	if err != nil {
 		return err
 	}
-	resolvedAttachments, err := resolveAttachmentInputs(attachments, attachmentType, attachStdin, stdinIsTTY)
-	if err != nil {
-		return err
+
+	// Auto-read stdin as text when piped and no explicit attachment flags are set.
+	// This enables: cat file.md | mrl "question about the content"
+	var stdinText string
+	useStdinAsText := !stdinIsTTY && len(attachments) == 0 && attachmentType == "" && !attachStdin
+	if useStdinAsText {
+		data, readErr := io.ReadAll(os.Stdin)
+		if readErr != nil {
+			return fmt.Errorf("failed to read stdin: %w", readErr)
+		}
+		stdinText = string(data)
 	}
-	attachmentParts, err := buildAttachmentParts(resolvedAttachments, attachmentType, os.Stdin)
-	if err != nil {
-		return err
+
+	var attachmentParts []llm.ContentPart
+	if !useStdinAsText {
+		resolvedAttachments, resolveErr := resolveAttachmentInputs(attachments, attachmentType, attachStdin, stdinIsTTY)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		attachmentParts, err = buildAttachmentParts(resolvedAttachments, attachmentType, os.Stdin)
+		if err != nil {
+			return err
+		}
 	}
+
+	// Build the final prompt: stdin text (if any) + args prompt
+	var finalPrompt string
+	switch {
+	case stdinText != "" && strings.TrimSpace(prompt) != "":
+		finalPrompt = stdinText + "\n\n" + prompt
+	case stdinText != "":
+		finalPrompt = stdinText
+	default:
+		finalPrompt = prompt
+	}
+
 	userParts := make([]llm.ContentPart, 0, 1+len(attachmentParts))
-	if strings.TrimSpace(prompt) != "" {
-		userParts = append(userParts, llm.TextPart(prompt))
+	if strings.TrimSpace(finalPrompt) != "" {
+		userParts = append(userParts, llm.TextPart(finalPrompt))
 	}
 	userParts = append(userParts, attachmentParts...)
 	if len(userParts) == 0 {
