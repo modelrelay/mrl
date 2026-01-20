@@ -315,10 +315,11 @@ func renderOutputText(output *[]generated.OutputItem) string {
 			continue
 		}
 		for _, part := range *item.Content {
-			if part.Text == nil {
+			textPart, err := part.AsContentPartText()
+			if err != nil {
 				continue
 			}
-			builder.WriteString(*part.Text)
+			builder.WriteString(textPart.Text)
 		}
 	}
 	return strings.TrimSpace(builder.String())

@@ -111,6 +111,11 @@ Flags:
 | `--system` | Set a system prompt |
 | `--stream` | Stream output as it's generated |
 | `--usage` | Show token usage after response |
+| `-a, --attachment` | Attach a local file (repeatable; use `-` for stdin) |
+| `--attachment-type` | Override attachment MIME type |
+| `--attach-stdin` | Attach stdin as a file (requires piping data) |
+
+If stdin is piped and `--attachment-type` is set, the CLI auto-attaches stdin even without `-a -`.
 
 Examples:
 
@@ -118,6 +123,10 @@ Examples:
 mrl "Explain quantum computing in simple terms"
 mrl "Write a poem" --stream
 mrl "Summarize this" --system "Be concise" --usage
+mrl "Summarize this PDF" -a report.pdf
+cat notes.pdf | mrl "Extract tables" -a - --attachment-type application/pdf
+cat notes.pdf | mrl "Extract tables" --attachment-type application/pdf
+cat notes.pdf | mrl "Extract tables" --attach-stdin --attachment-type application/pdf
 mrl "Hello" --model gpt-5.2
 ```
 

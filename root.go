@@ -14,6 +14,9 @@ func newRootCmd() *cobra.Command {
 	var system string
 	var stream bool
 	var usage bool
+	var attachments []string
+	var attachmentType string
+	var attachStdin bool
 
 	root := &cobra.Command{
 		Use:   "mrl [prompt]",
@@ -32,7 +35,7 @@ Examples:
 			if len(args) == 0 {
 				return cmd.Help()
 			}
-			return runPrompt(cmd, args, model, system, stream, usage)
+			return runPrompt(cmd, args, model, system, attachments, attachmentType, attachStdin, stream, usage)
 		},
 	}
 
@@ -41,6 +44,9 @@ Examples:
 	root.Flags().StringVar(&system, "system", "", "System prompt")
 	root.Flags().BoolVar(&stream, "stream", false, "Stream output as it's generated")
 	root.Flags().BoolVar(&usage, "usage", false, "Show token usage after response")
+	root.Flags().StringArrayVarP(&attachments, "attachment", "a", nil, "Attach a local file (repeatable; use '-' for stdin)")
+	root.Flags().StringVar(&attachmentType, "attachment-type", "", "Override attachment MIME type (useful for stdin)")
+	root.Flags().BoolVar(&attachStdin, "attach-stdin", false, "Attach stdin as a file (requires piping data)")
 
 	// Global flags
 	root.PersistentFlags().String("profile", "", "Config profile")

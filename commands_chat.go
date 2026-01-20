@@ -4,15 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	sdk "github.com/modelrelay/modelrelay/sdk/go"
+	"github.com/modelrelay/modelrelay/sdk/go/llm"
 	"github.com/spf13/cobra"
 )
 
 // runPrompt is the default action when mrl is invoked with a prompt.
-func runPrompt(cmd *cobra.Command, args []string, modelFlag, system string, stream, showUsage bool) error {
+func runPrompt(cmd *cobra.Command, args []string, modelFlag, system string, attachments []string, attachmentType string, attachStdin bool, stream, showUsage bool) error {
 	cfg, err := runtimeConfigFrom(cmd)
 	if err != nil {
 		return err
@@ -29,17 +31,50 @@ func runPrompt(cmd *cobra.Command, args []string, modelFlag, system string, stre
 	}
 
 	prompt := strings.Join(args, " ")
+	stdinIsTTY, err := isTerminal(os.Stdin)
+	if err != nil {
+		return err
+	}
+	resolvedAttachments, err := resolveAttachmentInputs(attachments, attachmentType, attachStdin, stdinIsTTY)
+	if err != nil {
+		return err
+	}
+	attachmentParts, err := buildAttachmentParts(resolvedAttachments, attachmentType, os.Stdin)
+	if err != nil {
+		return err
+	}
+	userParts := make([]llm.ContentPart, 0, 1+len(attachmentParts))
+	if strings.TrimSpace(prompt) != "" {
+		userParts = append(userParts, llm.TextPart(prompt))
+	}
+	userParts = append(userParts, attachmentParts...)
+	if len(userParts) == 0 {
+		return errors.New("prompt or attachment required")
+	}
 
 	ctx, cancel := contextWithTimeout(cfg.Timeout)
 	defer cancel()
 
 	if stream {
-		return runStreamWithUsage(ctx, client, model, system, prompt, showUsage)
+		return runStreamWithUsage(ctx, client, model, system, userParts, showUsage)
 	}
 
-	opts := &sdk.ChatOptions{System: system}
+	builder := client.Responses.New().Model(sdk.NewModelID(model))
+	if system != "" {
+		builder = builder.System(system)
+	}
+	builder = builder.Item(llm.InputItem{
+		Type:    llm.InputItemTypeMessage,
+		Role:    llm.RoleUser,
+		Content: userParts,
+	})
+
 	start := time.Now()
-	resp, err := client.Chat(ctx, model, prompt, opts)
+	req, callOpts, err := builder.Build()
+	if err != nil {
+		return err
+	}
+	resp, err := client.Responses.Create(ctx, req, callOpts...)
 	if err != nil {
 		return err
 	}
@@ -57,11 +92,24 @@ func runPrompt(cmd *cobra.Command, args []string, modelFlag, system string, stre
 	return nil
 }
 
-func runStreamWithUsage(ctx context.Context, client *sdk.Client, model, system, prompt string, showUsage bool) error {
-	builder := client.Responses.New().Model(sdk.NewModelID(model)).User(prompt)
+func isTerminal(file *os.File) (bool, error) {
+	info, err := file.Stat()
+	if err != nil {
+		return false, err
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0, nil
+}
+
+func runStreamWithUsage(ctx context.Context, client *sdk.Client, model, system string, userParts []llm.ContentPart, showUsage bool) error {
+	builder := client.Responses.New().Model(sdk.NewModelID(model))
 	if system != "" {
 		builder = builder.System(system)
 	}
+	builder = builder.Item(llm.InputItem{
+		Type:    llm.InputItemTypeMessage,
+		Role:    llm.RoleUser,
+		Content: userParts,
+	})
 
 	req, opts, err := builder.Build()
 	if err != nil {
