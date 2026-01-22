@@ -177,6 +177,40 @@ Config options (set with `mrl config set`):
 
 By default, no commands are allowed. Use `--allow` to whitelist command prefixes, `--allow-all` to permit any command, or set these in your config.
 
+### Run a local RLM session
+
+Run a local RLM session where Python executes on your machine and LLM calls go through ModelRelay (uses your configured default model unless you pass `--model`):
+
+```bash
+# Pipe a file into the local Python sandbox
+cat large_dataset.csv | mrl rlm "Summarize the data and compute key stats"
+
+# Attach local files by path
+mrl rlm "Summarize the data" -a ./large_dataset.csv
+
+# Multiple files (shell expands globs before mrl runs)
+mrl rlm "Summarize all datasets" -a ./data/*.csv -a ./logs/*.json
+```
+
+Flags:
+
+| Flag | Description |
+|------|-------------|
+| `-a, --attachment` | Attach a local file (repeatable; use `-` for stdin) |
+| `--attachment-type` | Override attachment MIME type (useful for stdin) |
+| `--attach-stdin` | Attach stdin as a file |
+| `--max-iterations` | Max code generation cycles (default: 10) |
+| `--max-subcalls` | Max llm_query/llm_batch calls (default: 50) |
+| `--max-depth` | Max recursion depth (default: 1) |
+| `--exec-timeout-ms` | Python execution timeout in ms (0 uses interpreter default) |
+| `--python` | Python executable (default: python3) |
+| `--max-inline-bytes` | Max inline context bytes (0 uses interpreter default) |
+| `--max-total-bytes` | Max total context bytes (0 uses interpreter default) |
+| `--inline-text-max-bytes` | Max inline text bytes per file (0 uses default 1MB) |
+| `--system` | Override system prompt |
+
+The CLI builds a JSON context from attached files and exposes it as `context` in Python. Small text files are also loaded into `context["files"][i]["text"]` for easier scanning.
+
 ### Run an agent
 
 ```bash

@@ -79,6 +79,7 @@ Examples:
 		newSchemaCmd(),
 		newVersionCmd(),
 		newDoCmd(),
+		newRLMCmd(),
 	)
 
 	return root
