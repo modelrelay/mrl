@@ -47,6 +47,7 @@ func newRLMCmd() *cobra.Command {
 	cmd.Flags().Int64Var(&flags.maxTotalBytes, "max-total-bytes", 0, "Max total context bytes (0 uses interpreter default)")
 	cmd.Flags().Int64Var(&flags.inlineTextMaxBytes, "inline-text-max-bytes", 0, "Max inline text bytes per file (0 uses default)")
 	cmd.Flags().StringVar(&flags.system, "system", "", "Override system prompt")
+	cmd.Flags().StringVar(&flags.toolChoice, "tool-choice", "", "Tool choice mode: auto, required, none")
 
 	return cmd
 }
@@ -65,6 +66,7 @@ type rlmFlags struct {
 	maxInlineBytes     int64
 	maxTotalBytes      int64
 	inlineTextMaxBytes int64
+	toolChoice         string
 }
 
 type rlmUsage struct {
@@ -157,6 +159,11 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 	wrapper := rlm.BuildRLMWrapperWithPlan(plan)
 	query := strings.Join(args, " ")
 
+	toolChoice, err := parseToolChoice(flags.toolChoice)
+	if err != nil {
+		return err
+	}
+
 	result, err := runLocalRLMLoop(ctx, localRLMParams{
 		client:         client,
 		interpreter:    interp,
@@ -165,6 +172,7 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 		query:          query,
 		model:          model,
 		system:         flags.system,
+		toolChoice:     toolChoice,
 		maxIterations:  flags.maxIterations,
 		maxSubcalls:    flags.maxSubcalls,
 		maxDepth:       flags.maxDepth,
@@ -197,6 +205,7 @@ type localRLMParams struct {
 	query          string
 	model          string
 	system         string
+	toolChoice     *llm.ToolChoice
 	maxIterations  int
 	maxSubcalls    int
 	maxDepth       int
@@ -266,7 +275,7 @@ func runLocalRLMLoop(ctx context.Context, params localRLMParams) (workflow.RLMRe
 	}
 
 	for i := 0; i < params.maxIterations; i++ {
-		resp, err := callLLM(ctx, params.client, params.model, conversation)
+		resp, err := callLLM(ctx, params.client, params.model, conversation, params.toolChoice)
 		if err != nil {
 			return workflow.RLMResultV1{}, err
 		}
@@ -339,8 +348,12 @@ func runLocalRLMLoop(ctx context.Context, params localRLMParams) (workflow.RLMRe
 	}, nil
 }
 
-func callLLM(ctx context.Context, client *sdk.Client, model string, input []llm.InputItem) (*sdk.Response, error) {
-	req, opts, err := client.Responses.New().Model(sdk.NewModelID(model)).Input(input).Build()
+func callLLM(ctx context.Context, client *sdk.Client, model string, input []llm.InputItem, toolChoice *llm.ToolChoice) (*sdk.Response, error) {
+	builder := client.Responses.New().Model(sdk.NewModelID(model)).Input(input)
+	if toolChoice != nil {
+		builder = builder.ToolChoice(*toolChoice)
+	}
+	req, opts, err := builder.Build()
 	if err != nil {
 		return nil, err
 	}
@@ -464,7 +477,7 @@ func (h *localSubcallHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	resp, err := callLLM(h.ctx, h.client, model, []llm.InputItem{llm.NewUserText(req.Prompt)})
+	resp, err := callLLM(h.ctx, h.client, model, []llm.InputItem{llm.NewUserText(req.Prompt)}, nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -498,6 +511,21 @@ func resolveRLMInlineTextLimit(override int64, maxInlineBytes int64) int64 {
 		return maxInlineBytes
 	}
 	return 1024 * 1024
+}
+
+func parseToolChoice(s string) (*llm.ToolChoice, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "":
+		return nil, nil
+	case "auto":
+		return &llm.ToolChoice{Type: llm.ToolChoiceAuto}, nil
+	case "required":
+		return &llm.ToolChoice{Type: llm.ToolChoiceRequired}, nil
+	case "none":
+		return &llm.ToolChoice{Type: llm.ToolChoiceNone}, nil
+	default:
+		return nil, fmt.Errorf("invalid tool-choice: %q (must be auto, required, or none)", s)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
