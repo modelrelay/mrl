@@ -274,7 +274,7 @@ func runLocalRLMLoop(ctx context.Context, params localRLMParams) (workflow.RLMRe
 			params.usage.add(resp.Usage)
 		}
 
-		code := strings.TrimSpace(resp.AssistantText())
+		code := rlm.NormalizeRLMCode(resp.AssistantText())
 		if code == "" {
 			return workflow.RLMResultV1{}, errors.New("missing response text")
 		}
