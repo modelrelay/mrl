@@ -138,7 +138,7 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 
 	interp := sdkrlm.NewLocalInterpreter(sdkrlm.LocalInterpreterConfig{
 		PythonPath: flags.pythonPath,
-		Caps: rlm.InterpreterCapabilities{
+		Caps: sdkrlm.InterpreterCapabilities{
 			MaxInlineBytes: flags.maxInlineBytes,
 			MaxTotalBytes:  flags.maxTotalBytes,
 		},
@@ -156,7 +156,7 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 	}
 	defer closeServer()
 
-	wrapper := rlm.BuildRLMWrapperWithPlan(plan)
+	wrapper := rlm.BuildRLMWrapperWithPlan(sdkContextPlanToPlatform(plan))
 	query := strings.Join(args, " ")
 
 	toolChoice, err := parseToolChoice(flags.toolChoice)
@@ -211,10 +211,33 @@ type localRLMParams struct {
 	maxDepth       int
 	execTimeoutMS  int
 	contextPayload []byte
-	contextPlan    rlm.ContextPlan
+	contextPlan    sdkrlm.ContextPlan
 	wrapper        string
 	subcallCounter *int
 	usage          *rlmUsage
+}
+
+// sdkContextPlanToPlatform converts SDK ContextPlan to platform ContextPlan.
+func sdkContextPlanToPlatform(p sdkrlm.ContextPlan) rlm.ContextPlan {
+	return rlm.ContextPlan{
+		Mode:        rlm.ContextLoadMode(p.Mode),
+		ContextPath: p.ContextPath,
+		InlineJSON:  p.InlineJSON,
+	}
+}
+
+// sdkExecResultToPlatform converts SDK ExecutionResult to platform ExecutionResult.
+func sdkExecResultToPlatform(r *sdkrlm.ExecutionResult) *rlm.ExecutionResult {
+	if r == nil {
+		return nil
+	}
+	return &rlm.ExecutionResult{
+		Stdout:     r.Stdout,
+		Stderr:     r.Stderr,
+		ExitCode:   r.ExitCode,
+		DurationMS: r.DurationMS,
+		TimedOut:   r.TimedOut,
+	}
 }
 
 func runLocalRLMLoop(ctx context.Context, params localRLMParams) (workflow.RLMResultV1, error) {
@@ -228,7 +251,7 @@ func runLocalRLMLoop(ctx context.Context, params localRLMParams) (workflow.RLMRe
 	)
 
 	var (
-		session      rlm.CodeSession
+		session      sdkrlm.CodeSession
 		sessionID    string
 		sessionIndex int64
 	)
@@ -289,12 +312,13 @@ func runLocalRLMLoop(ctx context.Context, params localRLMParams) (workflow.RLMRe
 		}
 
 		execResult, execErr := session.RunPython(ctx, params.wrapper+code, buildEnv(), params.execTimeoutMS)
+		platformExecResult := sdkExecResultToPlatform(execResult)
 
 		// Use shared iteration processing
 		iterOutput := rlm.ProcessIteration(rlm.IterationInput{
 			Iteration:  i + 1,
 			Code:       code,
-			ExecResult: execResult,
+			ExecResult: platformExecResult,
 			ExecErr:    execErr,
 		})
 		if iterOutput.ParseErr != nil {
@@ -310,7 +334,7 @@ func runLocalRLMLoop(ctx context.Context, params localRLMParams) (workflow.RLMRe
 		}
 
 		// Build iteration record
-		record := rlm.BuildIterationRecord(i+1, code, execResult)
+		record := rlm.BuildIterationRecord(i+1, code, platformExecResult)
 		trajectory = append(trajectory, workflow.RLMIterationV1{
 			Iteration: record.Iteration,
 			Code:      record.Code,
@@ -326,7 +350,7 @@ func runLocalRLMLoop(ctx context.Context, params localRLMParams) (workflow.RLMRe
 		}
 
 		conversation = append(conversation, llm.NewAssistantText(code))
-		feedback := rlm.BuildFeedbackMessage(execResult, execErr, recovered)
+		feedback := rlm.BuildFeedbackMessage(platformExecResult, execErr, recovered)
 		conversation = append(conversation, llm.NewUserText(feedback))
 	}
 
@@ -364,12 +388,12 @@ func callLLM(ctx context.Context, client *sdk.Client, model string, input []llm.
 	return resp, nil
 }
 
-func startLocalRLMSession(ctx context.Context, interp *sdkrlm.LocalInterpreter, plan rlm.ContextPlan, payload []byte) (rlm.CodeSession, string, error) {
+func startLocalRLMSession(ctx context.Context, interp *sdkrlm.LocalInterpreter, plan sdkrlm.ContextPlan, payload []byte) (sdkrlm.CodeSession, string, error) {
 	session, err := interp.Start(ctx, "rlm-local", nil)
 	if err != nil {
 		return nil, "", err
 	}
-	if plan.Mode == rlm.ContextLoadFile {
+	if plan.Mode == sdkrlm.ContextLoadFile {
 		if err := session.WriteFile(ctx, plan.ContextPath, payload, 0o644); err != nil {
 			session.Close()
 			return nil, "", err
