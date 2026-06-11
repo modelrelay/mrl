@@ -369,6 +369,51 @@ mrl tier get <tier_id>
 
 Table output is the default. Use `--json` for machine-readable output.
 
+## Account & tier administration
+
+Most commands use a data-plane secret API key (`mr_sk_*`). Project and tier
+administration instead require an **account bearer token**, obtained with
+`mrl auth login` and stored in the active profile.
+
+```bash
+# Log in (password via stdin is recommended; --password and
+# MODELRELAY_PASSWORD are also supported).
+printf '%s' "$PASSWORD" | mrl auth login --email you@example.com --password-stdin
+
+# Clear the stored account token.
+mrl auth logout
+```
+
+Create a tier in the active project (`--project` / `MODELRELAY_PROJECT_ID` /
+profile). A tier is either a flat `subscription` (Stripe price) or a metered
+`paygo` tier (optionally seeded with promo credit):
+
+```bash
+# A flat Pro subscription ($10/mo) billed via Stripe.
+mrl tier create --code pro --name "Pro" --billing-mode subscription \
+  --provider stripe --price 1000 --interval month \
+  --model gemini-3-flash-preview --default-model gemini-3-flash-preview
+
+# A pay-as-you-go tier seeded with $1 of promo credit.
+mrl tier create --code paygo --name "Pay as you go" --billing-mode paygo \
+  --promo-credits 100 --model gemini-3-flash-preview --default-model gemini-3-flash-preview
+```
+
+| Flag | Description |
+|------|-------------|
+| `--code` | Tier code, e.g. `pro` (required) |
+| `--billing-mode` | `subscription` or `paygo` (required) |
+| `--name` | Display name |
+| `--provider` | Billing provider for subscription tiers (e.g. `stripe`) |
+| `--price` | Subscription price in cents |
+| `--interval` | `month` or `year` |
+| `--trial-days` | Free-trial length in days |
+| `--promo-credits` | Promo credit granted on first customer token, in cents |
+| `--spend-limit` | Spend limit in cents (subscription tiers) |
+| `--model` | Model id available on the tier (repeatable) |
+| `--default-model` | Which `--model` is the default |
+| `--token-ttl` | Customer-token max TTL in seconds |
+
 ## Releasing
 
 To release a new version (from monorepo):

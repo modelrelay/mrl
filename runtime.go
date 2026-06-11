@@ -23,6 +23,7 @@ type runtimeConfig struct {
 	BaseURL   string
 	ProjectID string
 	APIKey    string
+	Token     string
 	Model     string
 	Output    outputFormat
 	Timeout   time.Duration
@@ -57,6 +58,7 @@ func resolveRuntimeConfig(cmd *cobra.Command, cfgFile cliConfig) (runtimeConfig,
 	baseFlag, _ := cmd.Flags().GetString("base-url")
 	projectFlag, _ := cmd.Flags().GetString("project")
 	apiKeyFlag, _ := cmd.Flags().GetString("api-key")
+	tokenFlag, _ := cmd.Flags().GetString("token")
 	jsonFlag, _ := cmd.Flags().GetBool("json")
 	timeoutFlag, _ := cmd.Flags().GetDuration("timeout")
 
@@ -67,6 +69,7 @@ func resolveRuntimeConfig(cmd *cobra.Command, cfgFile cliConfig) (runtimeConfig,
 
 	projectID := firstNonEmpty(projectFlag, os.Getenv("MODELRELAY_PROJECT_ID"), profile.ProjectID)
 	apiKey := firstNonEmpty(apiKeyFlag, os.Getenv("MODELRELAY_API_KEY"), os.Getenv("MODELRELAY_SECRET_KEY"), profile.APIKey)
+	token := firstNonEmpty(tokenFlag, os.Getenv("MODELRELAY_TOKEN"), profile.Token)
 	model := firstNonEmpty(os.Getenv("MODELRELAY_MODEL"), profile.Model)
 
 	output, err := resolveOutputFormat(jsonFlag, profile.Output)
@@ -84,6 +87,7 @@ func resolveRuntimeConfig(cmd *cobra.Command, cfgFile cliConfig) (runtimeConfig,
 		BaseURL:   strings.TrimSpace(baseURL),
 		ProjectID: strings.TrimSpace(projectID),
 		APIKey:    strings.TrimSpace(apiKey),
+		Token:     strings.TrimSpace(token),
 		Model:     strings.TrimSpace(model),
 		Output:    output,
 		Timeout:   timeout,

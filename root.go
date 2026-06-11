@@ -53,6 +53,7 @@ Examples:
 	root.PersistentFlags().String("base-url", "", "API base URL override")
 	root.PersistentFlags().String("project", "", "Project UUID")
 	root.PersistentFlags().String("api-key", "", "Secret API key (mr_sk_*)")
+	root.PersistentFlags().String("token", "", "Account bearer token (from 'mrl auth login')")
 	root.PersistentFlags().Bool("json", false, "Output JSON")
 	root.PersistentFlags().Duration("timeout", 30*time.Second, "Request timeout")
 
@@ -71,6 +72,7 @@ Examples:
 
 	root.AddCommand(
 		newConfigCmd(),
+		newAuthCmd(),
 		newCustomerCmd(),
 		newUsageCmd(),
 		newTierCmd(),

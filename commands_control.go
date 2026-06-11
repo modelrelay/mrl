@@ -222,7 +222,130 @@ func newTierCmd() *cobra.Command {
 		Use:   "tier",
 		Short: "Manage tiers",
 	}
-	cmd.AddCommand(newTierListCmd(), newTierGetCmd())
+	cmd.AddCommand(newTierListCmd(), newTierGetCmd(), newTierCreateCmd())
+	return cmd
+}
+
+func newTierCreateCmd() *cobra.Command {
+	var (
+		code         string
+		name         string
+		billingMode  string
+		provider     string
+		priceCents   int64
+		interval     string
+		trialDays    int32
+		promoCents   int64
+		spendLimit   int64
+		models       []string
+		defaultModel string
+		tokenTTL     int64
+	)
+
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create a tier (requires 'mrl auth login')",
+		Long: `Create a subscription or paygo tier in a project.
+
+Tier administration uses an account bearer token (run 'mrl auth login' first),
+not a data-plane API key, and targets the active project (--project /
+MODELRELAY_PROJECT_ID / profile).
+
+Examples:
+  # A flat Pro subscription ($10/mo) billed via Stripe:
+  mrl tier create --code pro --name "Pro" --billing-mode subscription \
+    --provider stripe --price 1000 --interval month \
+    --model gemini-3-flash-preview --default-model gemini-3-flash-preview
+
+  # A pay-as-you-go tier seeded with $1 of promo credit:
+  mrl tier create --code paygo --name "Pay as you go" --billing-mode paygo \
+    --promo-credits 100 --model gemini-3-flash-preview --default-model gemini-3-flash-preview`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := runtimeConfigFrom(cmd)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(cfg.Token) == "" {
+				return errors.New("account token required: run 'mrl auth login' first")
+			}
+			if strings.TrimSpace(cfg.ProjectID) == "" {
+				return errors.New("project required: pass --project or set project_id in the profile")
+			}
+			code = strings.TrimSpace(code)
+			billingMode = strings.TrimSpace(billingMode)
+			if code == "" {
+				return errors.New("--code is required")
+			}
+			if billingMode != "subscription" && billingMode != "paygo" {
+				return errors.New("--billing-mode must be 'subscription' or 'paygo'")
+			}
+
+			modelReqs := make([]map[string]any, 0, len(models))
+			for _, m := range models {
+				m = strings.TrimSpace(m)
+				if m == "" {
+					continue
+				}
+				modelReqs = append(modelReqs, map[string]any{
+					"model_id":   m,
+					"is_default": m == strings.TrimSpace(defaultModel),
+				})
+			}
+
+			payload := map[string]any{
+				"tier_code":    code,
+				"display_name": strings.TrimSpace(name),
+				"billing_mode": billingMode,
+				"models":       modelReqs,
+			}
+			if billingMode == "subscription" {
+				payload["billing_provider"] = strings.TrimSpace(provider)
+				payload["price_amount_cents"] = priceCents
+				payload["price_interval"] = strings.TrimSpace(interval)
+				payload["trial_days"] = trialDays
+				if spendLimit > 0 {
+					payload["spend_limit_cents"] = spendLimit
+				}
+			}
+			// Promo credits apply to both subscription and paygo tiers.
+			if promoCents > 0 {
+				payload["promo_credits_cents"] = promoCents
+			}
+			if tokenTTL > 0 {
+				payload["customer_token_max_ttl_seconds"] = tokenTTL
+			}
+
+			ctx, cancel := contextWithTimeout(cfg.Timeout)
+			defer cancel()
+
+			path := fmt.Sprintf("/projects/%s/tiers", cfg.ProjectID)
+			var resp tierResponse
+			if err := doJSON(ctx, cfg, authModeBearer, http.MethodPost, path, payload, &resp); err != nil {
+				return err
+			}
+
+			if cfg.Output == outputFormatJSON {
+				printJSON(resp)
+				return nil
+			}
+			printTierDetails(resp.Tier)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&code, "code", "", "Tier code (e.g. pro)")
+	cmd.Flags().StringVar(&name, "name", "", "Display name")
+	cmd.Flags().StringVar(&billingMode, "billing-mode", "", "Billing mode: subscription|paygo")
+	cmd.Flags().StringVar(&provider, "provider", "", "Billing provider for subscription tiers (e.g. stripe)")
+	cmd.Flags().Int64Var(&priceCents, "price", 0, "Subscription price in cents (subscription tiers)")
+	cmd.Flags().StringVar(&interval, "interval", "", "Billing interval: month|year (subscription tiers)")
+	cmd.Flags().Int32Var(&trialDays, "trial-days", 0, "Free-trial length in days (subscription tiers)")
+	cmd.Flags().Int64Var(&promoCents, "promo-credits", 0, "Promo credit granted on first customer token, in cents")
+	cmd.Flags().Int64Var(&spendLimit, "spend-limit", 0, "Spend limit in cents (subscription tiers)")
+	cmd.Flags().StringArrayVar(&models, "model", nil, "Model id available on the tier (repeatable)")
+	cmd.Flags().StringVar(&defaultModel, "default-model", "", "Which --model is the default")
+	cmd.Flags().Int64Var(&tokenTTL, "token-ttl", 0, "Customer-token max TTL in seconds")
+	_ = cmd.MarkFlagRequired("code")
+	_ = cmd.MarkFlagRequired("billing-mode")
 	return cmd
 }
 

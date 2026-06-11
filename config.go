@@ -14,14 +14,16 @@ type cliConfig struct {
 }
 
 type cliProfile struct {
-	APIKey    string   `toml:"api_key,omitempty"`
-	BaseURL   string   `toml:"base_url,omitempty"`
-	ProjectID string   `toml:"project_id,omitempty"`
-	Output    string   `toml:"output,omitempty"`
-	Model     string   `toml:"model,omitempty"`
-	AllowAll  bool     `toml:"allow_all,omitempty"`
-	Allow     []string `toml:"allow,omitempty"`
-	Trace     bool     `toml:"trace,omitempty"`
+	APIKey       string   `toml:"api_key,omitempty"`
+	Token        string   `toml:"token,omitempty"`
+	RefreshToken string   `toml:"refresh_token,omitempty"`
+	BaseURL      string   `toml:"base_url,omitempty"`
+	ProjectID    string   `toml:"project_id,omitempty"`
+	Output       string   `toml:"output,omitempty"`
+	Model        string   `toml:"model,omitempty"`
+	AllowAll     bool     `toml:"allow_all,omitempty"`
+	Allow        []string `toml:"allow,omitempty"`
+	Trace        bool     `toml:"trace,omitempty"`
 }
 
 func loadCLIConfig() (cliConfig, error) {

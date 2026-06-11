@@ -17,6 +17,9 @@ type authMode int
 const (
 	authModeNone authMode = iota
 	authModeAPIKey
+	// authModeBearer authenticates with an account bearer token (from
+	// 'mrl auth login'), required for project/tier admin routes.
+	authModeBearer
 )
 
 func doJSON(ctx context.Context, cfg runtimeConfig, mode authMode, method, path string, payload any, out any) error {
@@ -86,6 +89,11 @@ func applyAuth(req *http.Request, cfg runtimeConfig, mode authMode) error {
 			return errors.New("api key required")
 		}
 		req.Header.Set("X-ModelRelay-Api-Key", strings.TrimSpace(cfg.APIKey))
+	case authModeBearer:
+		if strings.TrimSpace(cfg.Token) == "" {
+			return errors.New("account token required: run 'mrl auth login'")
+		}
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.Token))
 	default:
 		return errors.New("invalid auth mode")
 	}
