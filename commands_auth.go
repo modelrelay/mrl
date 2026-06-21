@@ -36,26 +36,35 @@ func newAuthLoginCmd() *cobra.Command {
 	var email string
 	var password string
 	var passwordStdin bool
+	var web bool
+	var provider string
 
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Log in with account credentials and store an account token",
-		Long: `Log in with your ModelRelay account email + password and store the
-resulting account token in the active profile, for use by project/tier admin
-commands.
+		Short: "Log in and store an account token (password or --web OAuth)",
+		Long: `Obtain a ModelRelay account token and store it in the active profile,
+for use by project/tier admin commands.
 
-Provide the password via --password-stdin (recommended), the MODELRELAY_PASSWORD
-environment variable, or --password:
+Two modes:
 
+  # Browser OAuth (GitHub/Google accounts) — opens your browser, no password:
+  mrl auth login --web                     # provider defaults to github
+  mrl auth login --web --provider google
+
+  # Email + password (password accounts) — via --password-stdin, MODELRELAY_PASSWORD,
+  # or --password:
   printf '%s' "$PASS" | mrl auth login --email you@example.com --password-stdin`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := runtimeConfigFrom(cmd)
 			if err != nil {
 				return err
 			}
+			if web {
+				return runWebLogin(cfg, strings.TrimSpace(provider))
+			}
 			email = strings.TrimSpace(email)
 			if email == "" {
-				return errors.New("--email is required")
+				return errors.New("--email is required (or use --web for browser OAuth)")
 			}
 			password, err = resolveLoginPassword(password, passwordStdin)
 			if err != nil {
@@ -81,10 +90,11 @@ environment variable, or --password:
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&email, "email", "", "Account email")
+	cmd.Flags().BoolVar(&web, "web", false, "Log in via the browser (OAuth) instead of a password")
+	cmd.Flags().StringVar(&provider, "provider", "github", "OAuth provider for --web (e.g. github, google)")
+	cmd.Flags().StringVar(&email, "email", "", "Account email (password login)")
 	cmd.Flags().StringVar(&password, "password", "", "Account password (prefer --password-stdin)")
 	cmd.Flags().BoolVar(&passwordStdin, "password-stdin", false, "Read the password from stdin")
-	_ = cmd.MarkFlagRequired("email")
 	return cmd
 }
 

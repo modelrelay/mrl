@@ -376,13 +376,21 @@ administration instead require an **account bearer token**, obtained with
 `mrl auth login` and stored in the active profile.
 
 ```bash
-# Log in (password via stdin is recommended; --password and
-# MODELRELAY_PASSWORD are also supported).
+# Browser OAuth (GitHub/Google accounts) — opens your browser, no password:
+mrl auth login --web                  # provider defaults to github
+mrl auth login --web --provider google
+
+# Email + password accounts (stdin recommended; --password and MODELRELAY_PASSWORD
+# also supported):
 printf '%s' "$PASSWORD" | mrl auth login --email you@example.com --password-stdin
 
 # Clear the stored account token.
 mrl auth logout
 ```
+
+`--web` runs a standard loopback OAuth flow (RFC 8252): it opens your browser to
+the provider and captures the account token on an ephemeral `127.0.0.1` port — no
+password and no manual token copying.
 
 Create a tier in the active project (`--project` / `MODELRELAY_PROJECT_ID` /
 profile). A tier is either a flat `subscription` (Stripe price) or a metered
