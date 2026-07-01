@@ -1,6 +1,6 @@
 module github.com/modelrelay/modelrelay/cmd/mrl
 
-go 1.25.4
+go 1.26.4
 
 require (
 	github.com/BurntSushi/toml v1.4.0
