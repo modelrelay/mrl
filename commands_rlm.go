@@ -309,7 +309,12 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 	}
 	runnerResp := runnerResult.Response
 	if !runnerResp.Ready {
-		return errors.New("max iterations exceeded")
+		// A post-exhaustion extracted answer is a usable best-effort result;
+		// it is flagged so callers never mistake it for a confirmed one.
+		if !runnerResp.Extracted || strings.TrimSpace(runnerResp.Answer) == "" {
+			return errors.New("max iterations exceeded")
+		}
+		fmt.Fprintln(os.Stderr, "rlm: iteration budget exhausted; answer extracted from the trajectory (not confirmed)")
 	}
 
 	answerPayload, err := json.Marshal(runnerResp.Answer)
