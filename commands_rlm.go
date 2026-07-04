@@ -56,6 +56,9 @@ func newRLMCmd() *cobra.Command {
 	cmd.Flags().StringVar(&flags.db, "db", "", "SQLite database file to expose as a read-only SQL data source")
 	cmd.Flags().StringVar(&flags.dbName, "db-name", "db", "Sandbox name for the SQL data source (e.g. db.query(...))")
 	cmd.Flags().StringVar(&flags.sqlProfile, "sql-profile", "", "SQL profile ID for the read-only policy (default: permissive read-only policy)")
+	cmd.Flags().Int64Var(&flags.subcallMaxOutputTokens, "subcall-max-output-tokens", 0, "Max output tokens per llm_query/llm_batch subcall (0 = server default, 2048)")
+	cmd.Flags().StringVar(&flags.subcallModel, "subcall-model", "", "Model for llm_query/llm_batch subcalls, e.g. a cheaper non-reasoning model (default: the root model)")
+	cmd.Flags().StringVar(&flags.subcallReasoningEffort, "subcall-reasoning-effort", "", "Reasoning effort for subcalls: none, low, medium, or high (default: server default, none)")
 
 	return cmd
 }
@@ -80,6 +83,28 @@ type rlmFlags struct {
 	db                 string
 	dbName             string
 	sqlProfile         string
+	// Subcall cost controls (rlm-core#25); zero values mean server defaults.
+	subcallMaxOutputTokens int64
+	subcallModel           string
+	subcallReasoningEffort string
+}
+
+// Subcall cost defaults applied by the local subcall proxy when neither the
+// runner payload nor the flags provide a value; mirrors the hosted
+// /rlm/subcall defaults (rlm-core#25).
+const (
+	localDefaultSubcallMaxOutputTokens = int64(2048)
+	localDefaultSubcallReasoningEffort = "none"
+)
+
+// validSubcallReasoningEffort mirrors the server-side allowed values.
+func validSubcallReasoningEffort(effort string) bool {
+	switch effort {
+	case "", "none", "low", "medium", "high":
+		return true
+	default:
+		return false
+	}
 }
 
 const (
@@ -178,6 +203,14 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 	if strings.TrimSpace(flags.toolChoice) != "" {
 		return errors.New("tool-choice is not supported for rlm-core")
 	}
+	if flags.subcallMaxOutputTokens < 0 {
+		return errors.New("subcall-max-output-tokens must be >= 0")
+	}
+	flags.subcallReasoningEffort = strings.TrimSpace(flags.subcallReasoningEffort)
+	if !validSubcallReasoningEffort(flags.subcallReasoningEffort) {
+		return errors.New("invalid subcall-reasoning-effort (want none, low, medium, or high)")
+	}
+	flags.subcallModel = strings.TrimSpace(flags.subcallModel)
 
 	maxInlineBytes := flags.maxInlineBytes
 	if maxInlineBytes <= 0 {
@@ -217,7 +250,11 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 	}
 
 	usage := &rlmUsage{}
-	server, err := startLocalRLMServer(ctx, client, cfg, model, flags.maxDepth, flags.maxSubcalls, usage)
+	server, err := startLocalRLMServer(ctx, client, cfg, model, flags.maxDepth, flags.maxSubcalls, usage, localSubcallDefaults{
+		MaxOutputTokens: flags.subcallMaxOutputTokens,
+		Model:           flags.subcallModel,
+		ReasoningEffort: flags.subcallReasoningEffort,
+	})
 	if err != nil {
 		return err
 	}
@@ -251,24 +288,27 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 	}
 
 	runnerReq := rlmrunner.RunnerRequest{
-		Model:                 model,
-		Question:              query,
-		SystemPrompt:          systemPrompt,
-		SystemPromptAdditions: systemAdditions,
-		Context:               contextInline,
-		ContextPath:           contextFile,
-		DataSources:           dataSources,
-		DefaultSource:         defaultSource,
-		MaxIterations:         flags.maxIterations,
-		MaxDepth:              flags.maxDepth,
-		MaxSubcalls:           flags.maxSubcalls,
-		ExecTimeoutMS:         flags.execTimeoutMS,
-		MaxOutputChars:        defaultRLMMaxOutputChars,
-		Token:                 server.Token,
-		RootEndpoint:          server.RootEndpoint,
-		SubcallEndpoint:       server.SubcallEndpoint,
-		Session:               sessionID,
-		SessionIndex:          1,
+		Model:                  model,
+		Question:               query,
+		SystemPrompt:           systemPrompt,
+		SystemPromptAdditions:  systemAdditions,
+		Context:                contextInline,
+		ContextPath:            contextFile,
+		DataSources:            dataSources,
+		DefaultSource:          defaultSource,
+		MaxIterations:          flags.maxIterations,
+		MaxDepth:               flags.maxDepth,
+		MaxSubcalls:            flags.maxSubcalls,
+		SubcallMaxOutputTokens: flags.subcallMaxOutputTokens,
+		SubcallModel:           flags.subcallModel,
+		SubcallReasoningEffort: flags.subcallReasoningEffort,
+		ExecTimeoutMS:          flags.execTimeoutMS,
+		MaxOutputChars:         defaultRLMMaxOutputChars,
+		Token:                  server.Token,
+		RootEndpoint:           server.RootEndpoint,
+		SubcallEndpoint:        server.SubcallEndpoint,
+		Session:                sessionID,
+		SessionIndex:           1,
 	}
 
 	interpreter := rlm.NewLocalInterpreter(rlm.LocalInterpreterConfig{
@@ -351,8 +391,14 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 	return nil
 }
 
-func callLLM(ctx context.Context, client *sdk.Client, model string, input []llm.InputItem) (*sdk.Response, error) {
+func callLLM(ctx context.Context, client *sdk.Client, model string, input []llm.InputItem, maxOutputTokens int64, reasoningEffort string) (*sdk.Response, error) {
 	builder := client.Responses.New().Model(sdk.NewModelID(model)).Input(input)
+	if maxOutputTokens > 0 {
+		builder = builder.MaxOutputTokens(maxOutputTokens)
+	}
+	if reasoningEffort != "" {
+		builder = builder.ReasoningEffort(reasoningEffort)
+	}
 	req, opts, err := builder.Build()
 	if err != nil {
 		return nil, err
@@ -431,7 +477,16 @@ type localRLMServer struct {
 	Close           func()
 }
 
-func startLocalRLMServer(ctx context.Context, client *sdk.Client, cfg runtimeConfig, defaultModel string, maxDepth, maxSubcalls int, usage *rlmUsage) (localRLMServer, error) {
+// localSubcallDefaults carries the --subcall-* flag values into the local
+// subcall proxy; per-payload values from the runner take precedence
+// (rlm-core#25).
+type localSubcallDefaults struct {
+	MaxOutputTokens int64
+	Model           string
+	ReasoningEffort string
+}
+
+func startLocalRLMServer(ctx context.Context, client *sdk.Client, cfg runtimeConfig, defaultModel string, maxDepth, maxSubcalls int, usage *rlmUsage, subcallDefaults localSubcallDefaults) (localRLMServer, error) {
 	if maxSubcalls < 0 {
 		return localRLMServer{}, errors.New("max_subcalls must be >= 0")
 	}
@@ -442,14 +497,15 @@ func startLocalRLMServer(ctx context.Context, client *sdk.Client, cfg runtimeCon
 	counter := 0
 
 	subcallHandler := &localSubcallHandler{
-		ctx:          ctx,
-		client:       client,
-		defaultModel: defaultModel,
-		maxDepth:     maxDepth,
-		maxSubcalls:  maxSubcalls,
-		token:        token,
-		counter:      &counter,
-		usage:        usage,
+		ctx:             ctx,
+		client:          client,
+		defaultModel:    defaultModel,
+		subcallDefaults: subcallDefaults,
+		maxDepth:        maxDepth,
+		maxSubcalls:     maxSubcalls,
+		token:           token,
+		counter:         &counter,
+		usage:           usage,
 	}
 	rootHandler := &localRootHandler{
 		ctx:          ctx,
@@ -536,15 +592,16 @@ func (h *localSQLValidateHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 }
 
 type localSubcallHandler struct {
-	ctx          context.Context
-	client       *sdk.Client
-	defaultModel string
-	maxDepth     int
-	maxSubcalls  int
-	token        string
-	counter      *int
-	usage        *rlmUsage
-	mu           sync.Mutex
+	ctx             context.Context
+	client          *sdk.Client
+	defaultModel    string
+	subcallDefaults localSubcallDefaults
+	maxDepth        int
+	maxSubcalls     int
+	token           string
+	counter         *int
+	usage           *rlmUsage
+	mu              sync.Mutex
 }
 
 func (h *localSubcallHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -563,9 +620,11 @@ func (h *localSubcallHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var req struct {
-		Prompt string  `json:"prompt"`
-		Model  *string `json:"model,omitempty"`
-		Depth  int     `json:"depth,omitempty"`
+		Prompt          string  `json:"prompt"`
+		Model           *string `json:"model,omitempty"`
+		MaxOutputTokens *int64  `json:"max_output_tokens,omitempty"`
+		ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+		Depth           int     `json:"depth,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
@@ -593,7 +652,11 @@ func (h *localSubcallHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Model precedence: per-payload override > --subcall-model > root model.
 	model := h.defaultModel
+	if h.subcallDefaults.Model != "" {
+		model = h.subcallDefaults.Model
+	}
 	if req.Model != nil && strings.TrimSpace(*req.Model) != "" {
 		model = strings.TrimSpace(*req.Model)
 	}
@@ -602,7 +665,34 @@ func (h *localSubcallHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	resp, err := callLLM(h.ctx, h.client, model, []llm.InputItem{llm.NewUserText(req.Prompt)})
+	// Subcall cost controls (rlm-core#25): default to bounded output and no
+	// thinking, mirroring the hosted /rlm/subcall defaults. Precedence:
+	// per-payload value > --subcall-* flag > default.
+	maxOutputTokens := h.subcallDefaults.MaxOutputTokens
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = localDefaultSubcallMaxOutputTokens
+	}
+	if req.MaxOutputTokens != nil {
+		if *req.MaxOutputTokens <= 0 {
+			http.Error(w, "max_output_tokens must be > 0", http.StatusBadRequest)
+			return
+		}
+		maxOutputTokens = *req.MaxOutputTokens
+	}
+	reasoningEffort := h.subcallDefaults.ReasoningEffort
+	if reasoningEffort == "" {
+		reasoningEffort = localDefaultSubcallReasoningEffort
+	}
+	if req.ReasoningEffort != nil {
+		effort := strings.TrimSpace(*req.ReasoningEffort)
+		if !validSubcallReasoningEffort(effort) {
+			http.Error(w, "invalid reasoning_effort (want none, low, medium, or high)", http.StatusBadRequest)
+			return
+		}
+		reasoningEffort = effort
+	}
+
+	resp, err := callLLM(h.ctx, h.client, model, []llm.InputItem{llm.NewUserText(req.Prompt)}, maxOutputTokens, reasoningEffort)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -795,15 +885,18 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 const rlmRemoteAttachmentNote = "Files in context include inline text only; do not attempt to open local file paths."
 
 type rlmExecuteRemoteRequest struct {
-	Model         string          `json:"model"`
-	Query         string          `json:"query"`
-	Context       json.RawMessage `json:"context,omitempty"`
-	ContextRef    string          `json:"context_ref,omitempty"`
-	SystemPrompt  string          `json:"system_prompt,omitempty"`
-	MaxIterations *int            `json:"max_iterations,omitempty"`
-	MaxDepth      *int            `json:"max_depth,omitempty"`
-	MaxSubcalls   *int            `json:"max_subcalls,omitempty"`
-	TimeoutMS     *int            `json:"timeout_ms,omitempty"`
+	Model                  string          `json:"model"`
+	Query                  string          `json:"query"`
+	Context                json.RawMessage `json:"context,omitempty"`
+	ContextRef             string          `json:"context_ref,omitempty"`
+	SystemPrompt           string          `json:"system_prompt,omitempty"`
+	MaxIterations          *int            `json:"max_iterations,omitempty"`
+	MaxDepth               *int            `json:"max_depth,omitempty"`
+	MaxSubcalls            *int            `json:"max_subcalls,omitempty"`
+	TimeoutMS              *int            `json:"timeout_ms,omitempty"`
+	SubcallMaxOutputTokens int64           `json:"subcall_max_output_tokens,omitempty"`
+	SubcallModel           string          `json:"subcall_model,omitempty"`
+	SubcallReasoningEffort string          `json:"subcall_reasoning_effort,omitempty"`
 }
 
 type rlmExecuteRemoteResult struct {
@@ -850,14 +943,17 @@ func runRLMRemote(ctx context.Context, cfg runtimeConfig, apiKey sdk.APIKeyAuth,
 	maxSubcalls := flags.maxSubcalls
 
 	req := rlmExecuteRemoteRequest{
-		Model:         model,
-		Query:         query,
-		Context:       contextInline,
-		ContextRef:    contextRef,
-		SystemPrompt:  systemPrompt,
-		MaxIterations: &maxIterations,
-		MaxDepth:      &maxDepth,
-		MaxSubcalls:   &maxSubcalls,
+		Model:                  model,
+		Query:                  query,
+		Context:                contextInline,
+		ContextRef:             contextRef,
+		SystemPrompt:           systemPrompt,
+		MaxIterations:          &maxIterations,
+		MaxDepth:               &maxDepth,
+		MaxSubcalls:            &maxSubcalls,
+		SubcallMaxOutputTokens: flags.subcallMaxOutputTokens,
+		SubcallModel:           flags.subcallModel,
+		SubcallReasoningEffort: flags.subcallReasoningEffort,
 	}
 	if flags.execTimeoutMS != 0 {
 		timeout := flags.execTimeoutMS
