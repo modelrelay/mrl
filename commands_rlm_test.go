@@ -32,11 +32,13 @@ func TestBuildRLMSystemAdditions_PrependsCustom(t *testing.T) {
 }
 
 func TestBuildRLMJSONResult_Success(t *testing.T) {
+	dataSourceRequests := 4
 	resp := rlmrunner.RunnerResponse{
-		Answer:     "42",
-		Ready:      true,
-		Iterations: 2,
-		Subcalls:   3,
+		Answer:             "42",
+		Ready:              true,
+		Iterations:         2,
+		Subcalls:           3,
+		DataSourceRequests: &dataSourceRequests,
 		Trajectory: []rlmrunner.RunnerTrajectoryEntry{
 			{Iteration: 1, CodeExecuted: "print(1)", ExecutionResult: "1"},
 		},
@@ -50,6 +52,9 @@ func TestBuildRLMJSONResult_Success(t *testing.T) {
 	}
 	if !result.Ready || result.Iterations != 2 || result.Subcalls != 3 {
 		t.Fatalf("unexpected result meta: %+v", result)
+	}
+	if result.DataSourceRequests == nil || *result.DataSourceRequests != dataSourceRequests {
+		t.Fatalf("data-source request attribution = %v", result.DataSourceRequests)
 	}
 	if result.Trajectory.Availability != "unavailable" || result.Trajectory.Reason != "default_no_content_retention" {
 		t.Fatalf("trajectory fact = %+v", result.Trajectory)

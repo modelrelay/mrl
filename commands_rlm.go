@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -60,6 +61,8 @@ func newRLMCmd() *cobra.Command {
 	cmd.Flags().StringVar(&flags.postgresDSNEnv, "postgres-dsn-env", "", "Environment variable containing a PostgreSQL DSN for a trusted read-only edge connector")
 	cmd.Flags().StringVar(&flags.dbName, "db-name", "db", "Sandbox name for the SQL data source (e.g. db.query(...))")
 	cmd.Flags().StringVar(&flags.sqlProfile, "sql-profile", "", "SQL profile ID for the read-only policy (default: permissive read-only policy)")
+	cmd.Flags().StringArrayVar(&flags.mcpConfigs, "mcp-config", nil, "Trusted remote MCP source config file (local/VPC mode; repeatable)")
+	cmd.Flags().StringVar(&flags.defaultSource, "default-source", "", "Default generated-code data source when more than one is mounted")
 	cmd.Flags().Int64Var(&flags.subcallMaxOutputTokens, "subcall-max-output-tokens", 0, "Max output tokens per llm_query/llm_batch subcall (0 = server default, 2048)")
 	cmd.Flags().StringVar(&flags.subcallModel, "subcall-model", "", "Model for llm_query/llm_batch subcalls, e.g. a cheaper non-reasoning model (default: the root model)")
 	cmd.Flags().StringVar(&flags.subcallReasoningEffort, "subcall-reasoning-effort", "", "Reasoning effort for subcalls: none, minimal, low, medium, high, or xhigh (default: server default, none)")
@@ -89,6 +92,8 @@ type rlmFlags struct {
 	postgresDSNEnv     string
 	dbName             string
 	sqlProfile         string
+	mcpConfigs         []string
+	defaultSource      string
 	// Subcall cost controls (rlm-core#25); zero values mean server defaults.
 	subcallMaxOutputTokens int64
 	subcallModel           string
@@ -258,13 +263,17 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 	}
 
 	if flags.remote {
-		if strings.TrimSpace(flags.db) != "" || strings.TrimSpace(flags.postgresDSNEnv) != "" {
-			return errors.New("--db and --postgres-dsn-env are local-mode only: SQL executes at the customer-controlled edge")
+		if strings.TrimSpace(flags.db) != "" || strings.TrimSpace(flags.postgresDSNEnv) != "" || len(flags.mcpConfigs) > 0 {
+			return errors.New("--db, --postgres-dsn-env, and --mcp-config are local/VPC-mode only: trusted data-provider transports execute at the customer-controlled edge")
 		}
 		return runRLMRemote(ctx, cfg, apiKey, model, strings.Join(args, " "), contextPayload, plan, flags, len(files) > 0)
 	}
 
 	usage := &rlmUsage{}
+	mcpMounts, err := loadLocalMCPMounts(flags.mcpConfigs)
+	if err != nil {
+		return err
+	}
 	postgresConnector, err := openLocalPostgresConnector(ctx, flags, cfg)
 	if err != nil {
 		return err
@@ -280,13 +289,18 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 		MaxOutputTokens: flags.subcallMaxOutputTokens,
 		Model:           flags.subcallModel,
 		ReasoningEffort: flags.subcallReasoningEffort,
-	}, newLocalPostgresBrokerConfig(flags, postgresConnector))
+	}, newLocalPostgresBrokerConfig(flags, postgresConnector), mcpMounts.Secrets)
 	if err != nil {
 		return err
 	}
 	defer server.Close()
 
 	dataSources, defaultSource, err := buildLocalSQLDataSource(flags, cfg, server)
+	if err != nil {
+		return err
+	}
+	dataSources = append(dataSources, mcpMounts.Sources...)
+	defaultSource, err = resolveLocalDefaultSource(dataSources, defaultSource, flags.defaultSource)
 	if err != nil {
 		return err
 	}
@@ -354,10 +368,21 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 		SessionIndex:           1,
 		Seed:                   flags.seed,
 	}
+	if len(mcpMounts.Sources) > 0 {
+		runnerReq.MCPSecretEndpoint = server.MCPSecretURL
+		runnerReq.MCPSecretToken = server.Token
+		runnerReq.MCPAllowedNetworks = mcpMounts.AllowedNetworks
+	}
 
 	var runnerEnv []string
 	if postgresEnv := strings.TrimSpace(flags.postgresDSNEnv); postgresEnv != "" {
 		runnerEnv = environmentWithoutVariable(os.Environ(), postgresEnv)
+	}
+	for _, secretEnv := range mcpMounts.SecretEnvNames {
+		if runnerEnv == nil {
+			runnerEnv = os.Environ()
+		}
+		runnerEnv = environmentWithoutVariable(runnerEnv, secretEnv)
 	}
 	interpreter := rlm.NewLocalInterpreter(rlm.LocalInterpreterConfig{
 		PythonPath: flags.pythonPath,
@@ -421,14 +446,15 @@ type rlmJSONError struct {
 // rlmJSONResult is the stdout envelope for `mrl rlm --json` (success and failure).
 // On failure Error is set and the process still exits non-zero.
 type rlmJSONResult struct {
-	Answer     json.RawMessage         `json:"answer,omitempty"`
-	Iterations int                     `json:"iterations"`
-	Subcalls   int                     `json:"subcalls"`
-	TotalUsage workflow.TokenUsage     `json:"total_usage,omitempty"`
-	Trajectory workflow.RLMContentFact `json:"trajectory"`
-	Ready      bool                    `json:"ready"`
-	Extracted  bool                    `json:"extracted,omitempty"`
-	Error      *rlmJSONError           `json:"error,omitempty"`
+	Answer             json.RawMessage         `json:"answer,omitempty"`
+	Iterations         int                     `json:"iterations"`
+	Subcalls           int                     `json:"subcalls"`
+	DataSourceRequests *int                    `json:"data_source_requests,omitempty"`
+	TotalUsage         workflow.TokenUsage     `json:"total_usage,omitempty"`
+	Trajectory         workflow.RLMContentFact `json:"trajectory"`
+	Ready              bool                    `json:"ready"`
+	Extracted          bool                    `json:"extracted,omitempty"`
+	Error              *rlmJSONError           `json:"error,omitempty"`
 }
 
 func buildRLMJSONResult(usage *rlmUsage, resp rlmrunner.RunnerResponse, runErr error) (rlmJSONResult, error) {
@@ -443,13 +469,14 @@ func buildRLMJSONResult(usage *rlmUsage, resp rlmrunner.RunnerResponse, runErr e
 		totalUsage = usage.snapshot()
 	}
 	result := rlmJSONResult{
-		Answer:     answerPayload,
-		Iterations: resp.Iterations,
-		Subcalls:   resp.Subcalls,
-		TotalUsage: totalUsage,
-		Trajectory: workflow.UnavailableRLMContent("default_no_content_retention"),
-		Ready:      resp.Ready,
-		Extracted:  resp.Extracted,
+		Answer:             answerPayload,
+		Iterations:         resp.Iterations,
+		Subcalls:           resp.Subcalls,
+		DataSourceRequests: resp.DataSourceRequests,
+		TotalUsage:         totalUsage,
+		Trajectory:         workflow.UnavailableRLMContent("default_no_content_retention"),
+		Ready:              resp.Ready,
+		Extracted:          resp.Extracted,
 	}
 	if runErr != nil {
 		errType := "RLMError"
@@ -663,6 +690,7 @@ type localRLMServer struct {
 	RootEndpoint    string
 	ValidateURL     string
 	BrokerURL       string
+	MCPSecretURL    string
 	Token           string
 	Close           func()
 }
@@ -676,7 +704,7 @@ type localSubcallDefaults struct {
 	ReasoningEffort string
 }
 
-func startLocalRLMServer(ctx context.Context, client *sdk.Client, cfg runtimeConfig, defaultModel string, maxDepth, maxSubcalls int, usage *rlmUsage, subcallDefaults localSubcallDefaults, postgresBroker *localPostgresBrokerConfig) (localRLMServer, error) {
+func startLocalRLMServer(ctx context.Context, client *sdk.Client, cfg runtimeConfig, defaultModel string, maxDepth, maxSubcalls int, usage *rlmUsage, subcallDefaults localSubcallDefaults, postgresBroker *localPostgresBrokerConfig, mcpSecrets map[localMCPSecretKey]string) (localRLMServer, error) {
 	if maxSubcalls < 0 {
 		return localRLMServer{}, errors.New("max_subcalls must be >= 0")
 	}
@@ -724,12 +752,19 @@ func startLocalRLMServer(ctx context.Context, client *sdk.Client, cfg runtimeCon
 			policy:    postgresBroker.policy,
 		})
 	}
+	// A non-nil empty map represents an unauthenticated MCP mount. Keep the
+	// callback route present whenever MCP is enabled so the runner request and
+	// host capability surface derive from the same source of truth.
+	if mcpSecrets != nil {
+		mux.Handle("/mcp/secret", &localMCPSecretBrokerHandler{token: token, secrets: mcpSecrets})
+	}
 	server := httptest.NewServer(mux)
 	return localRLMServer{
 		SubcallEndpoint: server.URL + "/rlm/subcall",
 		RootEndpoint:    server.URL + "/rlm/root",
 		ValidateURL:     server.URL + "/sql/validate",
 		BrokerURL:       server.URL + "/sql/source",
+		MCPSecretURL:    server.URL + "/mcp/secret",
 		Token:           token,
 		Close:           server.Close,
 	}, nil
@@ -844,7 +879,11 @@ func (h *localPostgresBrokerHandler) validate(ctx context.Context, sqlText strin
 
 func validBearerToken(r *http.Request, expected string) bool {
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
-	return strings.HasPrefix(strings.ToLower(auth), "bearer ") && strings.TrimSpace(auth[len("bearer "):]) == expected
+	if !strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+		return false
+	}
+	actual := strings.TrimSpace(auth[len("bearer "):])
+	return subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) == 1
 }
 
 func writeSQLBrokerError(w http.ResponseWriter, status int, message string) {
