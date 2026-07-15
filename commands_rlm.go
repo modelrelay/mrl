@@ -16,7 +16,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/modelrelay/modelrelay/platform/postgressource"
 	"github.com/modelrelay/modelrelay/platform/rlm"
 	"github.com/modelrelay/modelrelay/platform/rlmrun"
 	"github.com/modelrelay/modelrelay/platform/rlmrunner"
@@ -55,6 +57,7 @@ func newRLMCmd() *cobra.Command {
 	cmd.Flags().StringVar(&flags.toolChoice, "tool-choice", "", "Tool choice mode (unsupported for rlm-core)")
 	cmd.Flags().BoolVar(&flags.remote, "remote", false, "Run RLM on ModelRelay (/rlm/execute) instead of local Python")
 	cmd.Flags().StringVar(&flags.db, "db", "", "SQLite database file to expose as a read-only SQL data source")
+	cmd.Flags().StringVar(&flags.postgresDSNEnv, "postgres-dsn-env", "", "Environment variable containing a PostgreSQL DSN for a trusted read-only edge connector")
 	cmd.Flags().StringVar(&flags.dbName, "db-name", "db", "Sandbox name for the SQL data source (e.g. db.query(...))")
 	cmd.Flags().StringVar(&flags.sqlProfile, "sql-profile", "", "SQL profile ID for the read-only policy (default: permissive read-only policy)")
 	cmd.Flags().Int64Var(&flags.subcallMaxOutputTokens, "subcall-max-output-tokens", 0, "Max output tokens per llm_query/llm_batch subcall (0 = server default, 2048)")
@@ -83,6 +86,7 @@ type rlmFlags struct {
 	toolChoice         string
 	remote             bool
 	db                 string
+	postgresDSNEnv     string
 	dbName             string
 	sqlProfile         string
 	// Subcall cost controls (rlm-core#25); zero values mean server defaults.
@@ -254,18 +258,29 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 	}
 
 	if flags.remote {
-		if strings.TrimSpace(flags.db) != "" {
-			return errors.New("--db is local-mode only for now: the SQL data source executes at the edge, next to the database file")
+		if strings.TrimSpace(flags.db) != "" || strings.TrimSpace(flags.postgresDSNEnv) != "" {
+			return errors.New("--db and --postgres-dsn-env are local-mode only: SQL executes at the customer-controlled edge")
 		}
 		return runRLMRemote(ctx, cfg, apiKey, model, strings.Join(args, " "), contextPayload, plan, flags, len(files) > 0)
 	}
 
 	usage := &rlmUsage{}
+	postgresConnector, err := openLocalPostgresConnector(ctx, flags, cfg)
+	if err != nil {
+		return err
+	}
+	if postgresConnector != nil {
+		defer func() {
+			if err := postgresConnector.Close(); err != nil {
+				log.Printf("warning: close PostgreSQL connector: %v", err)
+			}
+		}()
+	}
 	server, err := startLocalRLMServer(ctx, client, cfg, model, flags.maxDepth, flags.maxSubcalls, usage, localSubcallDefaults{
 		MaxOutputTokens: flags.subcallMaxOutputTokens,
 		Model:           flags.subcallModel,
 		ReasoningEffort: flags.subcallReasoningEffort,
-	})
+	}, newLocalPostgresBrokerConfig(flags, postgresConnector))
 	if err != nil {
 		return err
 	}
@@ -340,8 +355,13 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 		Seed:                   flags.seed,
 	}
 
+	var runnerEnv []string
+	if postgresEnv := strings.TrimSpace(flags.postgresDSNEnv); postgresEnv != "" {
+		runnerEnv = environmentWithoutVariable(os.Environ(), postgresEnv)
+	}
 	interpreter := rlm.NewLocalInterpreter(rlm.LocalInterpreterConfig{
 		PythonPath: flags.pythonPath,
+		Env:        runnerEnv,
 		Limits: rlm.InterpreterLimits{
 			MaxTimeoutMS:   rlmrunner.DefaultRunnerTimeoutMS,
 			MaxOutputBytes: defaultRLMMaxOutputChars,
@@ -513,17 +533,44 @@ var defaultLocalSQLPolicy = json.RawMessage(`{
 	"subqueries": {"allowed": true}
 }`)
 
+var defaultLocalPostgresPolicy = json.RawMessage(`{
+	"dialect": "postgres",
+	"read_only": true,
+	"limits": {"default_limit": 1000, "max_limit": 1000, "timeout_ms": 5000},
+	"aggregations": {"allowed": true, "functions": ["count", "sum", "avg", "min", "max", "string_agg", "array_agg", "json_agg"]},
+	"subqueries": {"allowed": true}
+}`)
+
 // buildLocalSQLDataSource turns --db/--db-name/--sql-profile into the runner's
 // declarative data_sources entry (docs/design/sql-data-source.md §4): the spec
 // carries the SQLite path (edge, local machine) and the loopback validate URL —
 // never database credentials, and rows never leave the process.
 func buildLocalSQLDataSource(flags *rlmFlags, cfg runtimeConfig, server localRLMServer) ([]rlmrunner.DataSourceSpec, string, error) {
 	dbPath := strings.TrimSpace(flags.db)
-	if dbPath == "" {
+	postgresEnv := strings.TrimSpace(flags.postgresDSNEnv)
+	if dbPath != "" && postgresEnv != "" {
+		return nil, "", errors.New("--db and --postgres-dsn-env are mutually exclusive")
+	}
+	if dbPath == "" && postgresEnv == "" {
 		return nil, "", nil
 	}
 	if strings.TrimSpace(cfg.APIKey) == "" {
-		return nil, "", errors.New("--db requires an API key (the SQL policy check runs via ModelRelay /sql/validate)")
+		return nil, "", errors.New("SQL data sources require an API key (the policy check runs via ModelRelay /sql/validate)")
+	}
+	name := strings.TrimSpace(flags.dbName)
+	if name == "" {
+		name = "db"
+	}
+	if postgresEnv != "" {
+		if server.BrokerURL == "" {
+			return nil, "", errors.New("PostgreSQL edge broker is unavailable")
+		}
+		return []rlmrunner.DataSourceSpec{{
+			Type:        "sql",
+			Name:        name,
+			BrokerURL:   server.BrokerURL,
+			BrokerToken: server.Token,
+		}}, name, nil
 	}
 	absPath, err := filepath.Abs(dbPath)
 	if err != nil {
@@ -535,10 +582,6 @@ func buildLocalSQLDataSource(flags *rlmFlags, cfg runtimeConfig, server localRLM
 	}
 	if info.IsDir() {
 		return nil, "", fmt.Errorf("--db: %s is a directory, expected a SQLite file", absPath)
-	}
-	name := strings.TrimSpace(flags.dbName)
-	if name == "" {
-		name = "db"
 	}
 	spec := rlmrunner.DataSourceSpec{
 		Type:          "sql",
@@ -555,6 +598,63 @@ func buildLocalSQLDataSource(flags *rlmFlags, cfg runtimeConfig, server localRLM
 	return []rlmrunner.DataSourceSpec{spec}, name, nil
 }
 
+func openLocalPostgresConnector(ctx context.Context, flags *rlmFlags, cfg runtimeConfig) (*postgressource.Connector, error) {
+	envName := strings.TrimSpace(flags.postgresDSNEnv)
+	if envName == "" {
+		return nil, nil
+	}
+	if strings.TrimSpace(flags.db) != "" {
+		return nil, errors.New("--db and --postgres-dsn-env are mutually exclusive")
+	}
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		return nil, errors.New("--postgres-dsn-env requires an API key for SQL policy validation")
+	}
+	dsn, ok := os.LookupEnv(envName)
+	if !ok || strings.TrimSpace(dsn) == "" {
+		return nil, fmt.Errorf("--postgres-dsn-env: environment variable %q is unset or empty", envName)
+	}
+	connector, err := postgressource.Open(ctx, dsn, postgressource.Limits{})
+	if err != nil {
+		return nil, fmt.Errorf("--postgres-dsn-env %q: %w", envName, err)
+	}
+	return connector, nil
+}
+
+func environmentWithoutVariable(environment []string, key string) []string {
+	prefix := key + "="
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		if !strings.HasPrefix(entry, prefix) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
+type postgresSQLSource interface {
+	Query(context.Context, string, int) ([]map[string]any, error)
+	Schema(context.Context) (string, error)
+}
+
+type localPostgresBrokerConfig struct {
+	source    postgresSQLSource
+	profileID string
+	policy    json.RawMessage
+}
+
+func newLocalPostgresBrokerConfig(flags *rlmFlags, source *postgressource.Connector) *localPostgresBrokerConfig {
+	if source == nil {
+		return nil
+	}
+	config := &localPostgresBrokerConfig{source: source}
+	if profile := strings.TrimSpace(flags.sqlProfile); profile != "" {
+		config.profileID = profile
+	} else {
+		config.policy = defaultLocalPostgresPolicy
+	}
+	return config
+}
+
 // localRLMServer is the loopback server the local runner talks to: LLM
 // root/subcall proxies, plus a /sql/validate forwarder when a SQL data source
 // is attached (the runner sends only the SQL string; mrl adds the API key).
@@ -562,6 +662,7 @@ type localRLMServer struct {
 	SubcallEndpoint string
 	RootEndpoint    string
 	ValidateURL     string
+	BrokerURL       string
 	Token           string
 	Close           func()
 }
@@ -575,7 +676,7 @@ type localSubcallDefaults struct {
 	ReasoningEffort string
 }
 
-func startLocalRLMServer(ctx context.Context, client *sdk.Client, cfg runtimeConfig, defaultModel string, maxDepth, maxSubcalls int, usage *rlmUsage, subcallDefaults localSubcallDefaults) (localRLMServer, error) {
+func startLocalRLMServer(ctx context.Context, client *sdk.Client, cfg runtimeConfig, defaultModel string, maxDepth, maxSubcalls int, usage *rlmUsage, subcallDefaults localSubcallDefaults, postgresBroker *localPostgresBrokerConfig) (localRLMServer, error) {
 	if maxSubcalls < 0 {
 		return localRLMServer{}, errors.New("max_subcalls must be >= 0")
 	}
@@ -613,14 +714,161 @@ func startLocalRLMServer(ctx context.Context, client *sdk.Client, cfg runtimeCon
 		apiKey:  strings.TrimSpace(cfg.APIKey),
 		token:   token,
 	})
+	if postgresBroker != nil {
+		mux.Handle("/sql/source", &localPostgresBrokerHandler{
+			baseURL:   cfg.BaseURL,
+			apiKey:    strings.TrimSpace(cfg.APIKey),
+			token:     token,
+			source:    postgresBroker.source,
+			profileID: postgresBroker.profileID,
+			policy:    postgresBroker.policy,
+		})
+	}
 	server := httptest.NewServer(mux)
 	return localRLMServer{
 		SubcallEndpoint: server.URL + "/rlm/subcall",
 		RootEndpoint:    server.URL + "/rlm/root",
 		ValidateURL:     server.URL + "/sql/validate",
+		BrokerURL:       server.URL + "/sql/source",
 		Token:           token,
 		Close:           server.Close,
 	}, nil
+}
+
+type localPostgresBrokerHandler struct {
+	baseURL   string
+	apiKey    string
+	token     string
+	source    postgresSQLSource
+	profileID string
+	policy    json.RawMessage
+}
+
+func (h *localPostgresBrokerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !validBearerToken(r, h.token) {
+		writeSQLBrokerError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var request struct {
+		Method string `json:"method"`
+		SQL    string `json:"sql,omitempty"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeSQLBrokerError(w, http.StatusBadRequest, "invalid broker request")
+		return
+	}
+	var result any
+	switch request.Method {
+	case "schema":
+		var err error
+		result, err = h.source.Schema(r.Context())
+		if err != nil {
+			writeSQLBrokerError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+	case "query":
+		if strings.TrimSpace(request.SQL) == "" {
+			writeSQLBrokerError(w, http.StatusBadRequest, "query requires non-empty SQL")
+			return
+		}
+		normalized, timeoutMS, err := h.validate(r.Context(), request.SQL)
+		if err != nil {
+			writeSQLBrokerError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		result, err = h.source.Query(r.Context(), normalized, timeoutMS)
+		if err != nil {
+			writeSQLBrokerError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+	default:
+		writeSQLBrokerError(w, http.StatusBadRequest, "method must be query or schema")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"result": result}); err != nil {
+		log.Printf("warning: encode PostgreSQL broker response: %v", err)
+	}
+}
+
+func (h *localPostgresBrokerHandler) validate(ctx context.Context, sqlText string) (string, int, error) {
+	payload := map[string]any{"sql": sqlText}
+	if h.profileID != "" {
+		payload["profile_id"] = h.profileID
+	} else {
+		payload["policy"] = h.policy
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", 0, errors.New("encode SQL validation request")
+	}
+	endpoint := strings.TrimSuffix(h.baseURL, "/") + "/sql/validate"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", 0, errors.New("build SQL validation request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-ModelRelay-Api-Key", h.apiKey)
+	if header := strings.TrimSpace(clientHeader()); header != "" {
+		req.Header.Set("X-ModelRelay-Client", header)
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", 0, errors.New("SQL policy validation failed")
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", 0, errors.New("read SQL validation response")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", 0, fmt.Errorf("SQL policy rejected the query: %s", extractAPIErrorMessage(raw, resp.Status))
+	}
+	var validated struct {
+		Valid         bool   `json:"valid"`
+		NormalizedSQL string `json:"normalized_sql"`
+		TimeoutMS     int    `json:"timeout_ms"`
+	}
+	if err := json.Unmarshal(raw, &validated); err != nil || !validated.Valid || strings.TrimSpace(validated.NormalizedSQL) == "" {
+		return "", 0, errors.New("SQL policy validator returned an invalid response")
+	}
+	return validated.NormalizedSQL, validated.TimeoutMS, nil
+}
+
+func validBearerToken(r *http.Request, expected string) bool {
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	return strings.HasPrefix(strings.ToLower(auth), "bearer ") && strings.TrimSpace(auth[len("bearer "):]) == expected
+}
+
+func writeSQLBrokerError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"message": message}})
+}
+
+func extractAPIErrorMessage(raw []byte, fallback string) string {
+	var response struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(raw, &response) == nil {
+		if message := strings.TrimSpace(response.Error.Message); message != "" {
+			return message
+		}
+		if message := strings.TrimSpace(response.Message); message != "" {
+			return message
+		}
+	}
+	return fallback
 }
 
 // localSQLValidateHandler forwards the runner's policy-validation calls to the

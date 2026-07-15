@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -119,6 +120,171 @@ func TestBuildLocalSQLDataSource_ProfileOverridesPolicy(t *testing.T) {
 	}
 	if defaultSource != "analytics" {
 		t.Fatalf("expected default source analytics, got %q", defaultSource)
+	}
+}
+
+func TestBuildLocalSQLDataSource_PostgresUsesBrokerWithoutDSN(t *testing.T) {
+	flags := &rlmFlags{postgresDSNEnv: "APP_DATABASE_URL", dbName: "warehouse"}
+	cfg := runtimeConfig{APIKey: "mr_sk_test"}
+	server := testLocalServer()
+	server.BrokerURL = "http://127.0.0.1:1/sql/source"
+
+	specs, defaultSource, err := buildLocalSQLDataSource(flags, cfg, server)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(specs) != 1 || defaultSource != "warehouse" {
+		t.Fatalf("unexpected source: %#v / %q", specs, defaultSource)
+	}
+	spec := specs[0]
+	if spec.BrokerURL != server.BrokerURL || spec.BrokerToken != server.Token {
+		t.Fatalf("broker wiring mismatch: %+v", spec)
+	}
+	encoded, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("APP_DATABASE_URL")) || bytes.Contains(encoded, []byte("postgres://")) {
+		t.Fatalf("runner spec leaked PostgreSQL configuration: %s", encoded)
+	}
+}
+
+func TestBuildLocalSQLDataSource_RejectsTwoDatabases(t *testing.T) {
+	flags := &rlmFlags{db: "app.db", postgresDSNEnv: "APP_DATABASE_URL"}
+	_, _, err := buildLocalSQLDataSource(flags, runtimeConfig{APIKey: "mr_sk_test"}, testLocalServer())
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected mutual-exclusion error, got %v", err)
+	}
+}
+
+func TestOpenLocalPostgresConnector_RequiresNamedEnvironmentValue(t *testing.T) {
+	const envName = "MODELRELAY_TEST_MISSING_POSTGRES_DSN"
+	t.Setenv(envName, "")
+	_, err := openLocalPostgresConnector(context.Background(), &rlmFlags{postgresDSNEnv: envName}, runtimeConfig{APIKey: "mr_sk_test"})
+	if err == nil || !strings.Contains(err.Error(), "unset or empty") {
+		t.Fatalf("expected missing environment error, got %v", err)
+	}
+}
+
+func TestPostgresRunnerEnvironmentRemovesDSN(t *testing.T) {
+	environment := []string{
+		"PATH=/usr/bin",
+		"MODELRELAY_POSTGRES_DSN=postgres://reader:secret@db/analytics",
+		"MODELRELAY_POSTGRES_DSN_BACKUP=keep",
+	}
+	filtered := environmentWithoutVariable(environment, "MODELRELAY_POSTGRES_DSN")
+	joined := strings.Join(filtered, "\n")
+	if strings.Contains(joined, "reader:secret") {
+		t.Fatalf("DSN leaked into runner environment: %q", joined)
+	}
+	if !strings.Contains(joined, "MODELRELAY_POSTGRES_DSN_BACKUP=keep") || !strings.Contains(joined, "PATH=/usr/bin") {
+		t.Fatalf("unrelated environment variables were removed: %q", joined)
+	}
+}
+
+func TestNewLocalPostgresBrokerConfig_NilConnectorDisablesBroker(t *testing.T) {
+	if config := newLocalPostgresBrokerConfig(&rlmFlags{}, nil); config != nil {
+		t.Fatalf("expected no broker config, got %#v", config)
+	}
+}
+
+type fakePostgresSQLSource struct {
+	gotSQL       string
+	gotTimeoutMS int
+	rows         []map[string]any
+	schema       string
+	queryErr     error
+}
+
+func (f *fakePostgresSQLSource) Query(_ context.Context, sql string, timeoutMS int) ([]map[string]any, error) {
+	f.gotSQL = sql
+	f.gotTimeoutMS = timeoutMS
+	return f.rows, f.queryErr
+}
+
+func (f *fakePostgresSQLSource) Schema(context.Context) (string, error) { return f.schema, nil }
+
+func TestLocalPostgresBroker_ValidatesThenExecutesNormalizedSQL(t *testing.T) {
+	var validation map[string]any
+	validator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-ModelRelay-Api-Key"); got != "mr_sk_test" {
+			t.Errorf("unexpected API key: %q", got)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&validation); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"valid": true, "normalized_sql": "SELECT name FROM users LIMIT 1", "timeout_ms": 321,
+		})
+	}))
+	defer validator.Close()
+
+	source := &fakePostgresSQLSource{rows: []map[string]any{{"name": "ada"}}}
+	handler := &localPostgresBrokerHandler{
+		baseURL: validator.URL, apiKey: "mr_sk_test", token: "tok", source: source,
+		policy: defaultLocalPostgresPolicy,
+	}
+	req := httptest.NewRequest(http.MethodPost, "/sql/source", strings.NewReader(`{"method":"query","sql":"SELECT name FROM users"}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if source.gotSQL != "SELECT name FROM users LIMIT 1" || source.gotTimeoutMS != 321 {
+		t.Fatalf("broker did not execute validated output: %q / %d", source.gotSQL, source.gotTimeoutMS)
+	}
+	policy, ok := validation["policy"].(map[string]any)
+	if !ok || policy["dialect"] != "postgres" || policy["read_only"] != true {
+		t.Fatalf("host-owned PostgreSQL policy missing: %#v", validation)
+	}
+	if !strings.Contains(rec.Body.String(), `"name":"ada"`) {
+		t.Fatalf("unexpected response: %s", rec.Body.String())
+	}
+}
+
+func TestLocalPostgresBroker_DoesNotExecuteRejectedSQL(t *testing.T) {
+	validator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"only SELECT statements are allowed"}}`))
+	}))
+	defer validator.Close()
+
+	source := &fakePostgresSQLSource{}
+	handler := &localPostgresBrokerHandler{baseURL: validator.URL, apiKey: "key", token: "tok", source: source, policy: defaultLocalPostgresPolicy}
+	req := httptest.NewRequest(http.MethodPost, "/sql/source", strings.NewReader(`{"method":"query","sql":"DELETE FROM users"}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "only SELECT") {
+		t.Fatalf("expected policy rejection, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if source.gotSQL != "" {
+		t.Fatalf("rejected SQL reached connector: %q", source.gotSQL)
+	}
+}
+
+func TestLocalPostgresBroker_ExecutionFailureIsNotPolicyRejection(t *testing.T) {
+	validator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"valid": true, "normalized_sql": "SELECT value FROM large_table LIMIT 1000", "timeout_ms": 5000,
+		})
+	}))
+	defer validator.Close()
+
+	source := &fakePostgresSQLSource{queryErr: errors.New("query exceeded the local response limit (1048576 bytes)")}
+	handler := &localPostgresBrokerHandler{baseURL: validator.URL, apiKey: "key", token: "tok", source: source, policy: defaultLocalPostgresPolicy}
+	req := httptest.NewRequest(http.MethodPost, "/sql/source", strings.NewReader(`{"method":"query","sql":"SELECT value FROM large_table"}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for execution failure, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "response limit") {
+		t.Fatalf("expected execution failure detail, got %s", rec.Body.String())
 	}
 }
 
