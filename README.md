@@ -226,10 +226,9 @@ Flags:
 | `-a, --attachment` | Attach a local file (repeatable; use `-` for stdin) |
 | `--attachment-type` | Override attachment MIME type (useful for stdin) |
 | `--attach-stdin` | Attach stdin as a file |
-| `--max-iterations` | Max code generation cycles (default: 10) |
 | `--max-subcalls` | Max llm_query/llm_batch calls (default: 50) |
 | `--max-depth` | Max recursion depth (default: 1) |
-| `--exec-timeout-ms` | Python execution timeout in ms (0 uses interpreter default) |
+| `--exec-timeout-ms` | Local-only Python execution timeout in ms (0 uses interpreter default) |
 | `--python` | Python executable (default: python3) |
 | `--max-inline-bytes` | Max inline context bytes (0 uses interpreter default) |
 | `--max-total-bytes` | Max total context bytes (0 uses interpreter default) |
@@ -240,6 +239,10 @@ Flags:
 | `--db-name` | Sandbox name for the SQL data source (default: `db`) |
 | `--sql-profile` | SQL profile ID for the read-only policy (default: permissive read-only) |
 | `--remote` | Run hosted RLM via `/rlm/execute` instead of local Python |
+
+JSON output reports `iterations` as a diagnostic. `trajectory` is a typed
+availability fact and is `unavailable` under the default no-content-retention
+policy; progress statuses are not replay content.
 
 The CLI builds a JSON context from attached files and exposes it as `context` in Python. Small text files are also loaded into `context["files"][i]["text"]` for easier scanning.
 

@@ -51,8 +51,8 @@ func TestBuildRLMJSONResult_Success(t *testing.T) {
 	if !result.Ready || result.Iterations != 2 || result.Subcalls != 3 {
 		t.Fatalf("unexpected result meta: %+v", result)
 	}
-	if len(result.Trajectory) != 1 || result.Trajectory[0].Code != "print(1)" {
-		t.Fatalf("trajectory not preserved: %+v", result.Trajectory)
+	if result.Trajectory.Availability != "unavailable" || result.Trajectory.Reason != "default_no_content_retention" {
+		t.Fatalf("trajectory fact = %+v", result.Trajectory)
 	}
 	var answer string
 	if err := json.Unmarshal(result.Answer, &answer); err != nil || answer != "42" {
@@ -74,7 +74,7 @@ func TestBuildRLMJSONResult_EmptyAnswerStillPresent(t *testing.T) {
 	}
 }
 
-func TestBuildRLMJSONResult_MaxIterationsFailureKeepsTrajectory(t *testing.T) {
+func TestBuildRLMJSONResult_FailureDoesNotLeakTrajectory(t *testing.T) {
 	resp := rlmrunner.RunnerResponse{
 		Answer:     "draft",
 		Ready:      false,
@@ -94,8 +94,8 @@ func TestBuildRLMJSONResult_MaxIterationsFailureKeepsTrajectory(t *testing.T) {
 	if result.Ready {
 		t.Fatal("ready must be false on failure")
 	}
-	if len(result.Trajectory) != 2 {
-		t.Fatalf("trajectory len = %d, want 2", len(result.Trajectory))
+	if result.Trajectory.Availability != "unavailable" {
+		t.Fatalf("trajectory fact = %+v", result.Trajectory)
 	}
 	var answer string
 	if err := json.Unmarshal(result.Answer, &answer); err != nil || answer != "draft" {
@@ -145,7 +145,7 @@ func TestWriteRLMLocalOutcomeTo_JSONEmitsOnFailure(t *testing.T) {
 	if decoded.Error == nil || decoded.Error.Message != "max iterations exceeded" {
 		t.Fatalf("decoded error = %+v", decoded.Error)
 	}
-	if len(decoded.Trajectory) != 1 {
+	if decoded.Trajectory.Availability != "unavailable" {
 		t.Fatalf("decoded trajectory = %+v", decoded.Trajectory)
 	}
 }

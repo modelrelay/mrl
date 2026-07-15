@@ -41,10 +41,9 @@ func newRLMCmd() *cobra.Command {
 	cmd.Flags().StringArrayVarP(&flags.attachments, "attachment", "a", nil, "Attach a local file (repeatable; use '-' for stdin)")
 	cmd.Flags().StringVar(&flags.attachmentType, "attachment-type", "", "Override attachment MIME type (useful for stdin)")
 	cmd.Flags().BoolVar(&flags.attachStdin, "attach-stdin", false, "Attach stdin as a file")
-	cmd.Flags().IntVar(&flags.maxIterations, "max-iterations", 10, "Max code generation cycles")
 	cmd.Flags().IntVar(&flags.maxSubcalls, "max-subcalls", 50, "Max llm_query/llm_batch calls")
 	cmd.Flags().IntVar(&flags.maxDepth, "max-depth", 1, "Max recursion depth")
-	cmd.Flags().IntVar(&flags.execTimeoutMS, "exec-timeout-ms", 0, "Python execution timeout in ms (0 uses interpreter default)")
+	cmd.Flags().IntVar(&flags.execTimeoutMS, "exec-timeout-ms", 0, "Local Python execution timeout in ms (0 uses interpreter default)")
 	cmd.Flags().StringVar(&flags.pythonPath, "python", "", "Python executable (default: python3)")
 	cmd.Flags().Int64Var(&flags.maxInlineBytes, "max-inline-bytes", 0, "Max inline context bytes (0 uses interpreter default)")
 	cmd.Flags().Int64Var(&flags.maxTotalBytes, "max-total-bytes", 0, "Max total context bytes (0 uses interpreter default)")
@@ -70,7 +69,6 @@ type rlmFlags struct {
 	attachments        []string
 	attachmentType     string
 	attachStdin        bool
-	maxIterations      int
 	maxSubcalls        int
 	maxDepth           int
 	execTimeoutMS      int
@@ -313,7 +311,6 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 		ContextPath:            contextFile,
 		DataSources:            dataSources,
 		DefaultSource:          defaultSource,
-		MaxIterations:          flags.maxIterations,
 		MaxDepth:               flags.maxDepth,
 		MaxSubcalls:            flags.maxSubcalls,
 		SubcallMaxOutputTokens: flags.subcallMaxOutputTokens,
@@ -360,7 +357,7 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 	runnerResult, err := rlmrunner.RunWithSession(ctx, session, runtimeDir, runnerReq, runOpts)
 	if err != nil {
 		// Prefer the runner's structured error message when present; still emit
-		// whatever partial response/trajectory we parsed (issue #1597).
+		// whatever partial response and diagnostics we parsed (issue #1597).
 		runErr := err
 		if runnerResult.Response.Error != nil && strings.TrimSpace(runnerResult.Response.Error.Message) != "" {
 			runErr = errors.New(runnerResult.Response.Error.Message)
@@ -372,9 +369,9 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 		// A post-exhaustion extracted answer is a usable best-effort result;
 		// it is flagged so callers never mistake it for a confirmed one.
 		if !runnerResp.Extracted || strings.TrimSpace(runnerResp.Answer) == "" {
-			return writeRLMLocalOutcome(cfg, usage, runnerResp, errors.New("max iterations exceeded"))
+			return writeRLMLocalOutcome(cfg, usage, runnerResp, errors.New("RLM execution budget exhausted without a confirmed answer"))
 		}
-		fmt.Fprintln(os.Stderr, "rlm: iteration budget exhausted; answer extracted from the trajectory (not confirmed)")
+		fmt.Fprintln(os.Stderr, "rlm: execution budget exhausted; answer extracted from retained loop state (not confirmed)")
 	}
 
 	return writeRLMLocalOutcome(cfg, usage, runnerResp, nil)
@@ -387,17 +384,16 @@ type rlmJSONError struct {
 }
 
 // rlmJSONResult is the stdout envelope for `mrl rlm --json` (success and failure).
-// On failure Error is set and the process still exits non-zero; trajectory /
-// partial answer are preserved when available (modelrelay#1597).
+// On failure Error is set and the process still exits non-zero.
 type rlmJSONResult struct {
-	Answer     json.RawMessage           `json:"answer,omitempty"`
-	Iterations int                       `json:"iterations"`
-	Subcalls   int                       `json:"subcalls"`
-	TotalUsage workflow.TokenUsage       `json:"total_usage,omitempty"`
-	Trajectory []workflow.RLMIterationV1 `json:"trajectory,omitempty"`
-	Ready      bool                      `json:"ready"`
-	Extracted  bool                      `json:"extracted,omitempty"`
-	Error      *rlmJSONError             `json:"error,omitempty"`
+	Answer     json.RawMessage         `json:"answer,omitempty"`
+	Iterations int                     `json:"iterations"`
+	Subcalls   int                     `json:"subcalls"`
+	TotalUsage workflow.TokenUsage     `json:"total_usage,omitempty"`
+	Trajectory workflow.RLMContentFact `json:"trajectory"`
+	Ready      bool                    `json:"ready"`
+	Extracted  bool                    `json:"extracted,omitempty"`
+	Error      *rlmJSONError           `json:"error,omitempty"`
 }
 
 func buildRLMJSONResult(usage *rlmUsage, resp rlmrunner.RunnerResponse, runErr error) (rlmJSONResult, error) {
@@ -406,14 +402,6 @@ func buildRLMJSONResult(usage *rlmUsage, resp rlmrunner.RunnerResponse, runErr e
 	answerPayload, err := json.Marshal(resp.Answer)
 	if err != nil {
 		return rlmJSONResult{}, err
-	}
-	trajectory := make([]workflow.RLMIterationV1, 0, len(resp.Trajectory))
-	for _, entry := range resp.Trajectory {
-		trajectory = append(trajectory, workflow.RLMIterationV1{
-			Iteration: entry.Iteration,
-			Code:      entry.CodeExecuted,
-			Stdout:    entry.ExecutionResult,
-		})
 	}
 	totalUsage := workflow.TokenUsage{}
 	if usage != nil {
@@ -424,7 +412,7 @@ func buildRLMJSONResult(usage *rlmUsage, resp rlmrunner.RunnerResponse, runErr e
 		Iterations: resp.Iterations,
 		Subcalls:   resp.Subcalls,
 		TotalUsage: totalUsage,
-		Trajectory: trajectory,
+		Trajectory: workflow.UnavailableRLMContent("default_no_content_retention"),
 		Ready:      resp.Ready,
 		Extracted:  resp.Extracted,
 	}
@@ -976,7 +964,6 @@ type rlmExecuteRemoteRequest struct {
 	Context                json.RawMessage `json:"context,omitempty"`
 	ContextRef             string          `json:"context_ref,omitempty"`
 	SystemPrompt           string          `json:"system_prompt,omitempty"`
-	MaxIterations          *int            `json:"max_iterations,omitempty"`
 	MaxDepth               *int            `json:"max_depth,omitempty"`
 	MaxSubcalls            *int            `json:"max_subcalls,omitempty"`
 	TimeoutMS              *int            `json:"timeout_ms,omitempty"`
@@ -1003,6 +990,9 @@ func runRLMRemote(ctx context.Context, cfg runtimeConfig, apiKey sdk.APIKeyAuth,
 	if flags.systemOverride {
 		return errors.New("system-override is not supported with --remote")
 	}
+	if flags.execTimeoutMS != 0 {
+		return errors.New("--exec-timeout-ms is local-mode only; hosted run wall time is owned by the resolved execution profile")
+	}
 
 	systemPrompt := strings.TrimSpace(flags.system)
 	if hasAttachments {
@@ -1024,7 +1014,6 @@ func runRLMRemote(ctx context.Context, cfg runtimeConfig, apiKey sdk.APIKeyAuth,
 		contextRef = ref
 	}
 
-	maxIterations := flags.maxIterations
 	maxDepth := flags.maxDepth
 	maxSubcalls := flags.maxSubcalls
 
@@ -1034,18 +1023,12 @@ func runRLMRemote(ctx context.Context, cfg runtimeConfig, apiKey sdk.APIKeyAuth,
 		Context:                contextInline,
 		ContextRef:             contextRef,
 		SystemPrompt:           systemPrompt,
-		MaxIterations:          &maxIterations,
 		MaxDepth:               &maxDepth,
 		MaxSubcalls:            &maxSubcalls,
 		SubcallMaxOutputTokens: flags.subcallMaxOutputTokens,
 		SubcallModel:           flags.subcallModel,
 		SubcallReasoningEffort: flags.subcallReasoningEffort,
 	}
-	if flags.execTimeoutMS != 0 {
-		timeout := flags.execTimeoutMS
-		req.TimeoutMS = &timeout
-	}
-
 	result, err := executeRLMRemote(ctx, nil, cfg.BaseURL, apiKey, req)
 	if err != nil {
 		return err

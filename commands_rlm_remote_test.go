@@ -1,14 +1,37 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/modelrelay/modelrelay/platform/rlm"
 	sdk "github.com/modelrelay/modelrelay/sdk/go"
 )
+
+func TestRLMExecuteRemoteRequest_HasNoLegacyMaxIterationsControl(t *testing.T) {
+	payload, err := json.Marshal(rlmExecuteRemoteRequest{Model: "demo", Query: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(payload, []byte("max_iterations")) {
+		t.Fatalf("remote request leaked removed control: %s", payload)
+	}
+}
+
+func TestRunRLMRemote_RejectsLocalExecutionTimeout(t *testing.T) {
+	err := runRLMRemote(
+		context.Background(), runtimeConfig{}, sdk.SecretKey("mr_sk_test"), "demo", "hi",
+		nil, rlm.ContextPlan{}, &rlmFlags{execTimeoutMS: 1000}, false,
+	)
+	if err == nil || !strings.Contains(err.Error(), "local-mode only") {
+		t.Fatalf("error = %v, want local-only timeout rejection", err)
+	}
+}
 
 func TestExecuteRLMRemote_Progress(t *testing.T) {
 	var (
