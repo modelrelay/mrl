@@ -1468,10 +1468,27 @@ func runRLMRelaySession(ctx context.Context, cfg runtimeConfig, apiKey sdk.APIKe
 	runnerRequest.Session = lease.ExecutionID
 	runnerRequest.SessionIndex = 1
 	fmt.Fprintf(os.Stderr, "rlm: execution lease %s (maximum settled spend: %d cents)\n", lease.ExecutionID, lease.MaxSettledSpendCents)
-	runResult, runErr := rlmrunner.RunLocalWithOptions(ctx, flags.pythonPath, runnerRequest, rlmrunner.RunOptions{
-		RequestID: lease.ExecutionID, TimeoutMS: profile.Limits.TimeoutMS,
-		OnProgress: func(event rlmrunner.ProgressEvent) { fmt.Fprintf(os.Stderr, "rlm: %s\n", event.Status) },
-	})
+	runResult, runErr := func() (rlmrunner.RunResult, error) {
+		interpreter := rlm.NewLocalInterpreter(rlm.LocalInterpreterConfig{
+			PythonPath: flags.pythonPath,
+			Limits: rlm.InterpreterLimits{
+				MaxTimeoutMS:   profile.Limits.TimeoutMS,
+				MaxOutputBytes: defaultRLMMaxOutputChars,
+			},
+		})
+		session, startErr := interpreter.StartCode(ctx, "rlm-relay-session", nil)
+		if startErr != nil {
+			return rlmrunner.RunResult{}, startErr
+		}
+		defer session.Close()
+		runtimeDir, runtimeErr := rlmrunner.RuntimeDir()
+		if runtimeErr != nil {
+			return rlmrunner.RunResult{}, runtimeErr
+		}
+		return rlmrunner.RunCodeSession(ctx, session, runtimeDir, runnerRequest, rlmrunner.RunOptions{
+			RequestID: lease.ExecutionID, TimeoutMS: profile.Limits.TimeoutMS,
+		})
+	}()
 	finalizeCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	finalizeErr := doRLMLeaseJSON(finalizeCtx, nil, cfg.BaseURL, apiKey, http.MethodPost, "/rlm/executions/"+url.PathEscape(lease.ExecutionID)+"/finalize", struct{}{}, nil)
