@@ -1437,7 +1437,23 @@ func runRLMRelaySession(ctx context.Context, cfg runtimeConfig, apiKey sdk.APIKe
 	if err != nil {
 		return err
 	}
-	preflight, err := rlmrunner.PreflightLocalWithOptions(ctx, flags.pythonPath, preflightRequest, rlmrunner.RunOptions{
+	interpreter := rlm.NewLocalInterpreter(rlm.LocalInterpreterConfig{
+		PythonPath: flags.pythonPath,
+		Limits: rlm.InterpreterLimits{
+			MaxTimeoutMS:   profile.Limits.TimeoutMS,
+			MaxOutputBytes: defaultRLMMaxOutputChars,
+		},
+	})
+	session, err := interpreter.StartCode(ctx, "rlm-relay-session", nil)
+	if err != nil {
+		return fmt.Errorf("start local Droste session: %w", err)
+	}
+	defer session.Close()
+	runtimeDir, err := rlmrunner.RuntimeDir()
+	if err != nil {
+		return fmt.Errorf("resolve local Droste runtime: %w", err)
+	}
+	preflight, err := rlmrunner.PreflightCodeSession(ctx, session, runtimeDir, preflightRequest, rlmrunner.RunOptions{
 		RequestID: "lease-preflight", TimeoutMS: profile.Limits.TimeoutMS,
 	})
 	if err != nil {
@@ -1476,27 +1492,9 @@ func runRLMRelaySession(ctx context.Context, cfg runtimeConfig, apiKey sdk.APIKe
 	runnerRequest.Session = lease.ExecutionID
 	runnerRequest.SessionIndex = 1
 	fmt.Fprintf(os.Stderr, "rlm: execution lease %s (maximum settled spend: %d cents)\n", lease.ExecutionID, lease.MaxSettledSpendCents)
-	runResult, runErr := func() (rlmrunner.RunResult, error) {
-		interpreter := rlm.NewLocalInterpreter(rlm.LocalInterpreterConfig{
-			PythonPath: flags.pythonPath,
-			Limits: rlm.InterpreterLimits{
-				MaxTimeoutMS:   profile.Limits.TimeoutMS,
-				MaxOutputBytes: defaultRLMMaxOutputChars,
-			},
-		})
-		session, startErr := interpreter.StartCode(ctx, "rlm-relay-session", nil)
-		if startErr != nil {
-			return rlmrunner.RunResult{}, startErr
-		}
-		defer session.Close()
-		runtimeDir, runtimeErr := rlmrunner.RuntimeDir()
-		if runtimeErr != nil {
-			return rlmrunner.RunResult{}, runtimeErr
-		}
-		return rlmrunner.RunCodeSession(ctx, session, runtimeDir, runnerRequest, rlmrunner.RunOptions{
-			RequestID: lease.ExecutionID, TimeoutMS: profile.Limits.TimeoutMS,
-		})
-	}()
+	runResult, runErr := rlmrunner.RunCodeSession(ctx, session, runtimeDir, runnerRequest, rlmrunner.RunOptions{
+		RequestID: lease.ExecutionID, TimeoutMS: profile.Limits.TimeoutMS,
+	})
 	finalizeErr := finalizeLease()
 	if finalizeErr != nil {
 		if runErr != nil {
