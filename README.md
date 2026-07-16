@@ -217,6 +217,14 @@ default.
 > mode. Point `--db` only at databases you're comfortable letting the model read.
 
 Use `--remote` to run hosted RLM on ModelRelay (`/rlm/execute`). Remote mode only supports inline text attachments (no local file paths) and does not support `--db` yet.
+
+Use `--relay-session` to run Droste locally with a durable ModelRelay execution
+lease. This resolves an immutable tier profile, performs local scaffold
+preflight, uses short-lived server-budgeted callbacks, and finalizes immutable
+content-free evidence. The CLI also verifies that the authoritative whole-cent
+settled-spend ceiling is unchanged between resolution and lease creation. It
+currently targets message/context testing; SQL and
+MCP transports remain in ordinary local mode.
 If you need large or binary files, use local mode.
 
 Flags:
@@ -240,6 +248,7 @@ Flags:
 | `--db-name` | Sandbox name for the SQL data source (default: `db`) |
 | `--sql-profile` | SQL profile ID for the read-only policy (default: permissive read-only) |
 | `--remote` | Run hosted RLM via `/rlm/execute` instead of local Python |
+| `--relay-session` | Run local Droste with a durable ModelRelay execution lease |
 
 JSON output reports `iterations` as a diagnostic. `trajectory` is a typed
 availability fact and is `unavailable` under the default no-content-retention

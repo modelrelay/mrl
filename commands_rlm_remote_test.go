@@ -97,3 +97,38 @@ func TestValidateRLMRemoteAttachments_RejectsMissingText(t *testing.T) {
 		t.Fatalf("expected error for missing inline text")
 	}
 }
+
+func TestDoRLMLeaseJSONUsesSupportedRESTBoundary(t *testing.T) {
+	t.Parallel()
+
+	var gotPath, gotKey, gotClient string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotKey = r.Header.Get("X-ModelRelay-Api-Key")
+		gotClient = r.Header.Get("X-ModelRelay-Client")
+		var request rlmLeaseResolutionRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		if request.Model != "preset:test" {
+			t.Errorf("model = %q", request.Model)
+		}
+		_, _ = w.Write([]byte(`{"profile":{"selector":"preset:test"}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	var response struct {
+		Profile struct {
+			Selector string `json:"selector"`
+		} `json:"profile"`
+	}
+	if err := doRLMLeaseJSON(t.Context(), server.Client(), server.URL, sdk.SecretKey("mr_sk_test"), http.MethodPost, "/rlm/executions/resolve", rlmLeaseResolutionRequest{Model: "preset:test"}, &response); err != nil {
+		t.Fatalf("doRLMLeaseJSON: %v", err)
+	}
+	if gotPath != "/rlm/executions/resolve" || gotKey != "mr_sk_test" || gotClient == "" {
+		t.Fatalf("request path/key/client = %q/%q/%q", gotPath, gotKey, gotClient)
+	}
+	if response.Profile.Selector != "preset:test" {
+		t.Fatalf("response selector = %q", response.Profile.Selector)
+	}
+}

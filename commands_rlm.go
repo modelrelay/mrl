@@ -22,6 +22,7 @@ import (
 
 	"github.com/modelrelay/modelrelay/platform/postgressource"
 	"github.com/modelrelay/modelrelay/platform/rlm"
+	"github.com/modelrelay/modelrelay/platform/rlmprofile"
 	"github.com/modelrelay/modelrelay/platform/rlmrun"
 	"github.com/modelrelay/modelrelay/platform/rlmrunner"
 	"github.com/modelrelay/modelrelay/platform/workflow"
@@ -58,6 +59,7 @@ func newRLMCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&flags.systemOverride, "system-override", false, "Replace the entire system prompt instead of prepending")
 	cmd.Flags().StringVar(&flags.toolChoice, "tool-choice", "", "Tool choice mode (unsupported for rlm-core)")
 	cmd.Flags().BoolVar(&flags.remote, "remote", false, "Run RLM on ModelRelay (/rlm/execute) instead of local Python")
+	cmd.Flags().BoolVar(&flags.relaySession, "relay-session", false, "Run local Droste with a durable ModelRelay execution lease")
 	cmd.Flags().StringVar(&flags.db, "db", "", "SQLite database file to expose as a read-only SQL data source")
 	cmd.Flags().StringVar(&flags.postgresDSNEnv, "postgres-dsn-env", "", "Environment variable containing a PostgreSQL DSN for a trusted read-only edge connector")
 	cmd.Flags().StringVar(&flags.snowflakeBrokerURL, "snowflake-broker-url", "", "URL of a trusted ModelRelay Edge for Snowflake broker")
@@ -91,6 +93,7 @@ type rlmFlags struct {
 	inlineTextMaxBytes      int64
 	toolChoice              string
 	remote                  bool
+	relaySession            bool
 	db                      string
 	postgresDSNEnv          string
 	snowflakeBrokerURL      string
@@ -182,6 +185,9 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 		defer cleanup()
 	}
 
+	if flags.remote && flags.relaySession {
+		return errors.New("--remote and --relay-session are mutually exclusive")
+	}
 	if flags.remote {
 		if validationErr := validateRLMRemoteAttachments(files); validationErr != nil {
 			return validationErr
@@ -198,7 +204,7 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 		client *sdk.Client
 		apiKey sdk.APIKeyAuth
 	)
-	if flags.remote {
+	if flags.remote || flags.relaySession {
 		if strings.TrimSpace(cfg.APIKey) == "" {
 			return errors.New("api key required")
 		}
@@ -265,6 +271,17 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 		if writeErr := os.WriteFile(plan.ContextPath, contextPayload, 0o600); writeErr != nil {
 			return writeErr
 		}
+	}
+	if flags.relaySession {
+		for _, name := range []string{"max-subcalls", "max-depth", "exec-timeout-ms", "subcall-max-output-tokens", "subcall-model", "subcall-reasoning-effort"} {
+			if cmd.Flags().Changed(name) {
+				return fmt.Errorf("--%s cannot override an immutable execution profile in --relay-session mode", name)
+			}
+		}
+		if strings.TrimSpace(flags.db) != "" || strings.TrimSpace(flags.postgresDSNEnv) != "" || strings.TrimSpace(flags.snowflakeBrokerURL) != "" || len(flags.mcpConfigs) > 0 {
+			return errors.New("--relay-session currently supports message/context workloads only; SQL and MCP transports remain local-mode only")
+		}
+		return runRLMRelaySession(ctx, cfg, apiKey, model, strings.Join(args, " "), plan, flags)
 	}
 
 	if flags.remote {
@@ -1315,6 +1332,207 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 		// Headers already written; log the error since we can't change the response
 		log.Printf("writeJSON encode error: %v", err)
 	}
+}
+
+type rlmLeaseResolutionRequest struct {
+	Model string `json:"model"`
+	Seed  *int64 `json:"seed"`
+}
+
+type rlmLeaseResolutionResponse struct {
+	Profile              rlmprofile.ResolvedExecution `json:"profile"`
+	RootArtifact         *rlmprofile.RootArtifact     `json:"root_artifact,omitempty"`
+	MaxSettledSpendCents int64                        `json:"max_settled_spend_cents"`
+}
+
+type rlmLeaseCreateRequest struct {
+	Model                        string                            `json:"model"`
+	Seed                         *int64                            `json:"seed"`
+	ScaffoldManifest             rlmprofile.DrosteScaffoldManifest `json:"scaffold_manifest"`
+	ExpectedRevisionID           rlmprofile.RevisionID             `json:"expected_revision_id"`
+	ExpectedRevisionContentHash  rlmprofile.Digest                 `json:"expected_revision_content_hash"`
+	ExpectedEffectiveFingerprint rlmprofile.Digest                 `json:"expected_effective_fingerprint"`
+}
+
+type rlmLeaseCreateResponse struct {
+	ExecutionID          string    `json:"execution_id"`
+	Credential           string    `json:"credential"`
+	ExecutionDeadline    time.Time `json:"execution_deadline"`
+	RootCallbackPath     string    `json:"root_callback_path"`
+	SubcallCallbackPath  string    `json:"subcall_callback_path"`
+	MaxSettledSpendCents int64     `json:"max_settled_spend_cents"`
+}
+
+type rlmLeaseSampling struct {
+	ReasoningEffort string   `json:"reasoning_effort,omitempty"`
+	MaxOutputTokens int64    `json:"max_output_tokens"`
+	Temperature     *float64 `json:"temperature,omitempty"`
+	Stop            []string `json:"stop,omitempty"`
+}
+
+func runRLMRelaySession(ctx context.Context, cfg runtimeConfig, apiKey sdk.APIKeyAuth, model, query string, plan rlm.ContextPlan, flags *rlmFlags) error {
+	var resolution rlmLeaseResolutionResponse
+	if err := doRLMLeaseJSON(ctx, nil, cfg.BaseURL, apiKey, http.MethodPost, "/rlm/executions/resolve", rlmLeaseResolutionRequest{
+		Model: model, Seed: flags.seed,
+	}, &resolution); err != nil {
+		return fmt.Errorf("resolve RLM execution lease: %w", err)
+	}
+	profile := resolution.Profile
+	if resolution.MaxSettledSpendCents <= 0 {
+		return errors.New("resolved RLM execution omitted authoritative spend ceiling")
+	}
+	budget, err := rlmrunner.NewBudget(
+		profile.Limits.MaxTotalTokens, profile.Limits.MaxSubcalls, profile.Limits.MaxDepth,
+		profile.Limits.TimeoutMS, profile.Root.MaxOutputTokens, profile.Subcall.MaxOutputTokens,
+	)
+	if err != nil {
+		return err
+	}
+	sandbox, err := rlmrunner.NewRunnerSandbox(defaultRLMMaxOutputChars, flags.execTimeoutMS, defaultRLMMaxOutputChars)
+	if err != nil {
+		return err
+	}
+	rootSampling, err := json.Marshal(rlmLeaseSampling{
+		ReasoningEffort: profile.Root.ReasoningEffort, MaxOutputTokens: profile.Root.MaxOutputTokens,
+	})
+	if err != nil {
+		return err
+	}
+	subcallSampling, err := json.Marshal(rlmLeaseSampling{
+		ReasoningEffort: profile.Subcall.ReasoningEffort, MaxOutputTokens: profile.Subcall.MaxOutputTokens,
+	})
+	if err != nil {
+		return err
+	}
+	systemPrompt := ""
+	systemAdditions := ""
+	if flags.systemOverride && strings.TrimSpace(flags.system) != "" {
+		systemPrompt = strings.TrimSpace(flags.system)
+	} else {
+		systemAdditions = rlm.BuildRunnerSystemAdditions(flags.system, profile.Limits.MaxDepth, profile.Limits.MaxSubcalls)
+	}
+	runnerRequest := rlmrunner.RunnerRequest{
+		Model: profile.Root.Model.String(), Budget: budget, Sandbox: sandbox,
+		Question: query, SystemPrompt: systemPrompt, SystemPromptAdditions: systemAdditions,
+		MaxOutputTokens: profile.Root.MaxOutputTokens, RootReasoningEffort: profile.Root.ReasoningEffort,
+		SubcallModel: profile.Subcall.Model.String(), SubcallMaxOutputTokens: profile.Subcall.MaxOutputTokens,
+		SubcallReasoningEffort: profile.Subcall.ReasoningEffort, SubcallConcurrency: profile.Limits.MaxConcurrency,
+		MaxDepth: profile.Limits.MaxDepth, MaxSubcalls: profile.Limits.MaxSubcalls,
+		MaxTotalTokens: profile.Limits.MaxTotalTokens, ExecTimeoutMS: profile.Limits.TimeoutMS,
+		MaxOutputChars: defaultRLMMaxOutputChars, Seed: flags.seed,
+		RootSampling: rootSampling, SubcallSampling: subcallSampling,
+	}
+	switch plan.Mode {
+	case rlm.ContextLoadInline:
+		runnerRequest.Context = plan.InlineJSON
+	case rlm.ContextLoadFile:
+		runnerRequest.ContextPath = plan.ContextPath
+	}
+	if resolution.RootArtifact != nil {
+		runnerRequest.RootModelRevision = resolution.RootArtifact.ServingRevision
+		requirements := resolution.RootArtifact.Scaffold
+		runnerRequest.CheckpointScaffoldRequirements = &requirements
+	}
+	preflightRequest, err := rlmrunner.PreflightRequestForRun(runnerRequest)
+	if err != nil {
+		return err
+	}
+	preflight, err := rlmrunner.PreflightLocalWithOptions(ctx, flags.pythonPath, preflightRequest, rlmrunner.RunOptions{
+		RequestID: "lease-preflight", TimeoutMS: profile.Limits.TimeoutMS,
+	})
+	if err != nil {
+		return fmt.Errorf("preflight local Droste: %w", err)
+	}
+	if preflight.Preflight == nil {
+		return errors.New("local Droste preflight returned no scaffold manifest")
+	}
+	var lease rlmLeaseCreateResponse
+	if err := doRLMLeaseJSON(ctx, nil, cfg.BaseURL, apiKey, http.MethodPost, "/rlm/executions", rlmLeaseCreateRequest{
+		Model: model, Seed: flags.seed, ScaffoldManifest: preflight.Preflight.ScaffoldManifest,
+		ExpectedRevisionID:           profile.RevisionID,
+		ExpectedRevisionContentHash:  profile.RevisionContentHash,
+		ExpectedEffectiveFingerprint: profile.EffectiveFingerprint,
+	}, &lease); err != nil {
+		return fmt.Errorf("create RLM execution lease: %w", err)
+	}
+	if strings.TrimSpace(lease.ExecutionID) == "" || strings.TrimSpace(lease.Credential) == "" {
+		return errors.New("RLM execution lease response is incomplete")
+	}
+	if lease.MaxSettledSpendCents != resolution.MaxSettledSpendCents {
+		return errors.New("RLM execution spend ceiling changed after resolution")
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
+	runnerRequest.Token = lease.Credential
+	runnerRequest.RootEndpoint = baseURL + lease.RootCallbackPath
+	runnerRequest.SubcallEndpoint = baseURL + lease.SubcallCallbackPath
+	runnerRequest.Session = lease.ExecutionID
+	runnerRequest.SessionIndex = 1
+	fmt.Fprintf(os.Stderr, "rlm: execution lease %s (maximum settled spend: %d cents)\n", lease.ExecutionID, lease.MaxSettledSpendCents)
+	runResult, runErr := rlmrunner.RunLocalWithOptions(ctx, flags.pythonPath, runnerRequest, rlmrunner.RunOptions{
+		RequestID: lease.ExecutionID, TimeoutMS: profile.Limits.TimeoutMS,
+		OnProgress: func(event rlmrunner.ProgressEvent) { fmt.Fprintf(os.Stderr, "rlm: %s\n", event.Status) },
+	})
+	finalizeCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	finalizeErr := doRLMLeaseJSON(finalizeCtx, nil, cfg.BaseURL, apiKey, http.MethodPost, "/rlm/executions/"+url.PathEscape(lease.ExecutionID)+"/finalize", struct{}{}, nil)
+	if finalizeErr != nil {
+		if runErr != nil {
+			return fmt.Errorf("local Droste failed: %v; finalize execution lease: %w", runErr, finalizeErr)
+		}
+		return fmt.Errorf("finalize RLM execution lease: %w", finalizeErr)
+	}
+	if runErr != nil {
+		return writeRLMLocalOutcome(cfg, nil, runResult.Response, runErr)
+	}
+	return writeRLMLocalOutcome(cfg, nil, runResult.Response, nil)
+}
+
+func doRLMLeaseJSON(ctx context.Context, httpClient *http.Client, baseURL string, apiKey sdk.APIKeyAuth, method, path string, requestBody, responseBody any) error {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return errors.New("base URL is required")
+	}
+	payload, err := json.Marshal(requestBody)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != nil && strings.TrimSpace(apiKey.String()) != "" {
+		req.Header.Set("X-ModelRelay-Api-Key", apiKey.String())
+	}
+	if header := strings.TrimSpace(clientHeader()); header != "" {
+		req.Header.Set("X-ModelRelay-Client", header)
+	}
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		message := strings.TrimSpace(string(body))
+		if message == "" {
+			message = resp.Status
+		}
+		return fmt.Errorf("request failed (%d): %s", resp.StatusCode, message)
+	}
+	if responseBody == nil {
+		return nil
+	}
+	if err := json.Unmarshal(body, responseBody); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+	return nil
 }
 
 const rlmRemoteAttachmentNote = "Files in context include inline text only; do not attempt to open local file paths."
