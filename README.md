@@ -243,7 +243,8 @@ Flags:
 
 JSON output reports `iterations` as a diagnostic. `trajectory` is a typed
 availability fact and is `unavailable` under the default no-content-retention
-policy; progress statuses are not replay content.
+policy. Local stderr is diagnostic output and is not interpreted as progress;
+hosted status-only progress is not replay content.
 
 The CLI builds a JSON context from attached files and exposes it as `context` in Python. Small text files are also loaded into `context["files"][i]["text"]` for easier scanning.
 

@@ -417,7 +417,7 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 			MaxTotalBytes:  flags.maxTotalBytes,
 		},
 	})
-	session, err := interpreter.Start(ctx, "rlm-local", nil)
+	session, err := interpreter.StartCode(ctx, "rlm-local", nil)
 	if err != nil {
 		return err
 	}
@@ -432,10 +432,7 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 		RequestID: sessionID,
 		TimeoutMS: interpreter.Limits().MaxTimeoutMS,
 	}
-	runOpts.OnProgress = func(evt rlmrunner.ProgressEvent) {
-		fmt.Fprintf(os.Stderr, "rlm: %s\n", evt.Status)
-	}
-	runnerResult, err := rlmrunner.RunWithSession(ctx, session, runtimeDir, runnerReq, runOpts)
+	runnerResult, err := rlmrunner.RunCodeSession(ctx, session, runtimeDir, runnerReq, runOpts)
 	if err != nil {
 		// Prefer the runner's structured error message when present; still emit
 		// whatever partial response and diagnostics we parsed (issue #1597).
