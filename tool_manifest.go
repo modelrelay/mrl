@@ -65,7 +65,7 @@ func loadToolManifest(path string) (toolManifest, error) {
 	if path == "" {
 		return toolManifest{}, errors.New("tool manifest path required")
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // manifest path is explicitly selected by the CLI user
 	if err != nil {
 		return toolManifest{}, err
 	}
@@ -75,9 +75,7 @@ func loadToolManifest(path string) (toolManifest, error) {
 	ext := strings.ToLower(filepath.Ext(path))
 	var manifest toolManifest
 	switch ext {
-	case ".toml":
-		fallthrough
-	case ".tml":
+	case ".toml", ".tml":
 		if err := toml.Unmarshal(raw, &manifest); err != nil {
 			return toolManifest{}, fmt.Errorf("failed to parse toml manifest: %w", err)
 		}

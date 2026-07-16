@@ -183,8 +183,8 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 	}
 
 	if flags.remote {
-		if err := validateRLMRemoteAttachments(files); err != nil {
-			return err
+		if validationErr := validateRLMRemoteAttachments(files); validationErr != nil {
+			return validationErr
 		}
 		files = stripRemoteAttachmentPaths(files)
 	}
@@ -252,8 +252,8 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 		return err
 	}
 	defer func() {
-		if err := os.RemoveAll(contextDir); err != nil {
-			log.Printf("warning: failed to remove temp dir %s: %v", contextDir, err)
+		if removeErr := os.RemoveAll(contextDir); removeErr != nil {
+			log.Printf("warning: failed to remove temp dir %s: %v", contextDir, removeErr)
 		}
 	}()
 	contextPath := filepath.Join(contextDir, "context.json")
@@ -262,8 +262,8 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 		return err
 	}
 	if plan.Mode == rlm.ContextLoadFile && !flags.remote {
-		if err := os.WriteFile(plan.ContextPath, contextPayload, 0o644); err != nil {
-			return err
+		if writeErr := os.WriteFile(plan.ContextPath, contextPayload, 0o600); writeErr != nil {
+			return writeErr
 		}
 	}
 
@@ -285,8 +285,8 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 	}
 	if postgresConnector != nil {
 		defer func() {
-			if err := postgresConnector.Close(); err != nil {
-				log.Printf("warning: close PostgreSQL connector: %v", err)
+			if closeErr := postgresConnector.Close(); closeErr != nil {
+				log.Printf("warning: close PostgreSQL connector: %v", closeErr)
 			}
 		}()
 	}
@@ -690,7 +690,7 @@ func brokerURLWithRunID(rawURL, runID string) (string, error) {
 func openLocalPostgresConnector(ctx context.Context, flags *rlmFlags, cfg runtimeConfig) (*postgressource.Connector, error) {
 	envName := strings.TrimSpace(flags.postgresDSNEnv)
 	if envName == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil connector means the optional PostgreSQL source is disabled
 	}
 	if strings.TrimSpace(flags.db) != "" {
 		return nil, errors.New("--db and --postgres-dsn-env are mutually exclusive")
@@ -1082,7 +1082,7 @@ func (h *localSubcallHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 
 	h.mu.Lock()
-	*h.counter = *h.counter + 1
+	*h.counter++
 	current := *h.counter
 	h.mu.Unlock()
 	if h.maxSubcalls >= 0 && current > h.maxSubcalls {
@@ -1438,7 +1438,7 @@ func executeRLMRemote(ctx context.Context, httpClient *http.Client, baseURL stri
 	if err != nil {
 		return rlmExecuteRemoteResult{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1495,7 +1495,7 @@ func createRLMContextRemote(ctx context.Context, httpClient *http.Client, baseUR
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1562,7 +1562,7 @@ func writeRLMProgress(w io.Writer, events []rlmrunner.ProgressEvent) {
 		if strings.TrimSpace(evt.Status) == "" {
 			continue
 		}
-		fmt.Fprintf(w, "rlm: %s\n", evt.Status)
+		_, _ = fmt.Fprintf(w, "rlm: %s\n", evt.Status)
 	}
 }
 

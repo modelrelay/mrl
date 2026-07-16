@@ -118,18 +118,18 @@ func runAgent(cmd *cobra.Command, slug string, flags *agentFlags, useTestEndpoin
 	defer cancel()
 
 	if useTestEndpoint {
-		mockTools, err := readMockTools(flags.mockToolsPath)
-		if err != nil {
-			return err
+		mockTools, mockErr := readMockTools(flags.mockToolsPath)
+		if mockErr != nil {
+			return mockErr
 		}
 		req := sdk.AgentTestRequest{
 			Input:     input,
 			MockTools: mockTools,
 			Options:   options,
 		}
-		resp, err := client.Agents.Test(ctx, projectID, slug, req)
-		if err != nil {
-			return err
+		resp, testErr := client.Agents.Test(ctx, projectID, slug, req)
+		if testErr != nil {
+			return testErr
 		}
 		return handleAgentResponse(cfg, resp, flags)
 	}
@@ -221,7 +221,7 @@ func resolveInput(inputText, inputFile string, tail []string) ([]llm.InputItem, 
 }
 
 func readInputFile(path string) ([]llm.InputItem, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // input path is explicitly selected by the CLI user
 	if err != nil {
 		return nil, err
 	}
@@ -246,9 +246,9 @@ func readInputFile(path string) ([]llm.InputItem, error) {
 
 func readMockTools(path string) (map[string]any, error) {
 	if strings.TrimSpace(path) == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil means the optional mock map was not requested
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // mock path is explicitly selected by the CLI user
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +262,7 @@ func readMockTools(path string) (map[string]any, error) {
 func handleAgentResponse(cfg runtimeConfig, resp sdk.AgentRunResponse, flags *agentFlags) error {
 	jsonPayload, _ := json.MarshalIndent(resp, "", "  ")
 	if flags.outputPath != "" {
-		if err := os.MkdirAll(filepath.Dir(flags.outputPath), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(flags.outputPath), 0o700); err != nil {
 			return fmt.Errorf("failed to create output directory: %w", err)
 		}
 		if err := os.WriteFile(flags.outputPath, jsonPayload, 0o600); err != nil {

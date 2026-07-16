@@ -126,8 +126,7 @@ When writing git commits:
 - Use conventional commit format when appropriate (feat:, fix:, docs:, refactor:, etc.)
 - Look at the actual diff to understand what changed before writing the message`
 	}
-	messages = append(messages, llm.NewSystemText(sysPrompt))
-	messages = append(messages, llm.NewUserText(prompt))
+	messages = append(messages, llm.NewSystemText(sysPrompt), llm.NewUserText(prompt))
 
 	modelID := sdk.NewModelID(model)
 	var usage sdk.AgentUsage

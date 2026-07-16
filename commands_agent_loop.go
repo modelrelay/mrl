@@ -105,12 +105,12 @@ func runAgentLoop(cmd *cobra.Command, args []string, flags *agentLoopFlags) erro
 	}
 	var manifest *toolManifest
 	if strings.TrimSpace(flags.toolsFile) != "" {
-		loaded, err := loadToolManifest(flags.toolsFile)
-		if err != nil {
-			return err
+		loaded, loadErr := loadToolManifest(flags.toolsFile)
+		if loadErr != nil {
+			return loadErr
 		}
-		if err := applyToolManifest(flags, loaded, cmd.Flags()); err != nil {
-			return err
+		if applyErr := applyToolManifest(flags, loaded, cmd.Flags()); applyErr != nil {
+			return applyErr
 		}
 		manifest = &loaded
 	}
@@ -258,7 +258,7 @@ func handleAgentLoopOutput(
 
 	jsonPayload, _ := json.MarshalIndent(result, "", "  ")
 	if flags.outputPath != "" {
-		if err := os.MkdirAll(filepath.Dir(flags.outputPath), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(flags.outputPath), 0o700); err != nil {
 			return fmt.Errorf("failed to create output directory: %w", err)
 		}
 		if err := os.WriteFile(flags.outputPath, jsonPayload, 0o600); err != nil {
@@ -389,13 +389,13 @@ func buildAgentLoopTools(flags *agentLoopFlags, manifest *toolManifest) ([]llm.T
 	seen := make(map[sdk.ToolName]struct{})
 
 	if selection.enableBash {
-		allowRules, err := parseBashRules(flags.bashAllow)
-		if err != nil {
-			return nil, nil, nil, err
+		allowRules, parseErr := parseBashRules(flags.bashAllow)
+		if parseErr != nil {
+			return nil, nil, nil, parseErr
 		}
-		denyRules, err := parseBashRules(flags.bashDeny)
-		if err != nil {
-			return nil, nil, nil, err
+		denyRules, parseErr := parseBashRules(flags.bashDeny)
+		if parseErr != nil {
+			return nil, nil, nil, parseErr
 		}
 		if !flags.bashAllowAll && len(allowRules) == 0 {
 			return nil, nil, nil, errors.New("bash tool requires --bash-allow or --bash-allow-all")
@@ -432,9 +432,9 @@ func buildAgentLoopTools(flags *agentLoopFlags, manifest *toolManifest) ([]llm.T
 	}
 
 	if selection.enableFS {
-		fsOptions, err := buildFSToolOptions(manifest)
-		if err != nil {
-			return nil, nil, nil, err
+		fsOptions, optionsErr := buildFSToolOptions(manifest)
+		if optionsErr != nil {
+			return nil, nil, nil, optionsErr
 		}
 		sdk.NewLocalFSToolPack(flags.toolRoot, fsOptions...).RegisterInto(registry)
 		defs, err = appendToolDefs(defs, seen, fsToolDefinitions()...)
@@ -618,7 +618,7 @@ func (s *tasksState) writeToFile() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.outputPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.outputPath), 0o700); err != nil {
 		return err
 	}
 	return os.WriteFile(s.outputPath, data, 0o600)

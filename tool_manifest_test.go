@@ -171,3 +171,14 @@ func TestLoadToolManifestUnsupportedExt(t *testing.T) {
 		t.Fatal("expected error for unsupported extension")
 	}
 }
+
+func TestBuildCustomExecTool_RejectsMaxOutputOverflow(t *testing.T) {
+	entry := toolManifestCustom{
+		Name:           "custom.echo",
+		Command:        []string{"echo"},
+		MaxOutputBytes: uint64(^uint(0)>>1) + 1,
+	}
+	if _, _, err := buildCustomExecTool(t.TempDir(), t.TempDir(), entry); err == nil {
+		t.Fatal("expected max_output_bytes overflow to fail")
+	}
+}

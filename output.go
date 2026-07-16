@@ -24,12 +24,12 @@ func printJSON(payload any) {
 
 func printKeyValueTable(pairs []kvPair) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "FIELD\tVALUE")
+	_, _ = fmt.Fprintln(w, "FIELD\tVALUE")
 	for _, pair := range pairs {
 		if pair.Value == "" {
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\n", pair.Key, pair.Value)
+		_, _ = fmt.Fprintf(w, "%s\t%s\n", pair.Key, pair.Value)
 	}
 	_ = w.Flush()
 }
@@ -46,13 +46,6 @@ func formatTime(val *time.Time) string {
 		return ""
 	}
 	return val.Format(time.RFC3339)
-}
-
-func formatFloat32(val *float32) string {
-	if val == nil {
-		return ""
-	}
-	return fmt.Sprintf("%.2f", *val)
 }
 
 func stringOrEmpty(val any) string {

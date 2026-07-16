@@ -49,8 +49,8 @@ func registerCustomTools(registry *sdk.ToolRegistry, toolRoot string, manifest *
 		return nil, errors.New("tool registry required")
 	}
 	var defs []llm.Tool
-	for _, entry := range manifest.Custom {
-		tool, def, err := buildCustomExecTool(toolRoot, manifest.sourceDir, entry)
+	for index := range manifest.Custom {
+		tool, def, err := buildCustomExecTool(toolRoot, manifest.sourceDir, manifest.Custom[index])
 		if err != nil {
 			return nil, err
 		}
@@ -102,6 +102,9 @@ func buildCustomExecTool(toolRoot, manifestDir string, entry toolManifestCustom)
 	}
 	maxOutput := customToolDefaultMaxOutputBytes
 	if entry.MaxOutputBytes > 0 {
+		if entry.MaxOutputBytes > uint64(^uint(0)>>1) {
+			return nil, llm.Tool{}, fmt.Errorf("custom tool %q max_output_bytes exceeds this platform's integer range", toolName)
+		}
 		maxOutput = int(entry.MaxOutputBytes)
 	}
 
@@ -123,7 +126,7 @@ func resolveCustomSchema(entry toolManifestCustom, manifestDir string) (json.Raw
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(manifestDir, path)
 		}
-		raw, err := os.ReadFile(path)
+		raw, err := os.ReadFile(path) //nolint:gosec // schema file is explicitly selected in the user-owned tool manifest
 		if err != nil {
 			return nil, err
 		}

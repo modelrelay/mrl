@@ -78,7 +78,7 @@ func buildAttachmentParts(paths []string, overrideMime string, stdin io.Reader) 
 		if path == "-" {
 			data, err = io.ReadAll(stdin)
 		} else {
-			data, err = os.ReadFile(path)
+			data, err = os.ReadFile(path) //nolint:gosec // attachment paths are explicitly selected by the CLI user
 			filename = filepath.Base(path)
 		}
 		if err != nil {

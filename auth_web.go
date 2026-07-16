@@ -27,12 +27,17 @@ func runWebLogin(cfg runtimeConfig, provider string) error {
 	}
 
 	// Local loopback server that receives the posted tokens.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		return fmt.Errorf("start local callback server: %w", err)
 	}
-	defer listener.Close()
-	port := listener.Addr().(*net.TCPAddr).Port
+	defer func() { _ = listener.Close() }()
+	tcpAddress, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		return fmt.Errorf("local callback listener returned address type %T", listener.Addr())
+	}
+	port := tcpAddress.Port
 	redirectURL := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
 
 	// Binds this flow to our callback (the API echoes it back as handoff_nonce).
@@ -71,7 +76,7 @@ func runWebLogin(cfg runtimeConfig, provider string) error {
 		resultCh <- loginResult{access: access, refresh: r.PostFormValue("refresh_token")}
 	})
 
-	srv := &http.Server{Handler: mux}
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(listener) }()
 	defer func() {
 		shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -147,5 +152,5 @@ func openBrowser(rawURL string) error {
 	default:
 		name, args = "xdg-open", []string{rawURL}
 	}
-	return exec.Command(name, args...).Start()
+	return exec.CommandContext(context.Background(), name, args...).Start() //nolint:gosec // command is an OS constant; the URL is the explicit browser target
 }

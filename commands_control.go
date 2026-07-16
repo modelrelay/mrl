@@ -96,7 +96,7 @@ func newCustomerGetCmd() *cobra.Command {
 				return errors.New("api key required")
 			}
 			customerID := strings.TrimSpace(args[0])
-			if _, err := uuid.Parse(customerID); err != nil {
+			if _, parseErr := uuid.Parse(customerID); parseErr != nil {
 				return errors.New("invalid customer id")
 			}
 
@@ -442,7 +442,7 @@ func customerHasData(customer generated.Customer) bool {
 
 func printCustomersTable(customers []generated.CustomerWithSubscription) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tEXTERNAL_ID\tEMAIL\tTIER\tSTATUS\tCREATED_AT")
+	_, _ = fmt.Fprintln(w, "ID\tEXTERNAL_ID\tEMAIL\tTIER\tSTATUS\tCREATED_AT")
 	for _, item := range customers {
 		tierCode := ""
 		status := ""
@@ -454,7 +454,7 @@ func printCustomersTable(customers []generated.CustomerWithSubscription) {
 				status = string(*item.Subscription.SubscriptionStatus)
 			}
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			formatUUIDPtr(item.Customer.Id),
 			stringOrEmpty(item.Customer.ExternalId),
 			stringOrEmpty(item.Customer.Email),
@@ -502,8 +502,9 @@ func printUsageSummaryDetails(summary usageSummary) {
 
 func printTiersTable(tiers []generated.Tier) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tCODE\tDISPLAY_NAME\tSPEND_LIMIT_CENTS\tPRICE_CENTS\tINTERVAL")
-	for _, tier := range tiers {
+	_, _ = fmt.Fprintln(w, "ID\tCODE\tDISPLAY_NAME\tSPEND_LIMIT_CENTS\tPRICE_CENTS\tINTERVAL")
+	for index := range tiers {
+		tier := &tiers[index]
 		spend := uint64(0)
 		if tier.SpendLimitCents != nil {
 			spend = *tier.SpendLimitCents
@@ -512,7 +513,7 @@ func printTiersTable(tiers []generated.Tier) {
 		if tier.PriceAmountCents != nil {
 			price = *tier.PriceAmountCents
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%s\n",
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%s\n",
 			formatUUIDPtr(tier.Id),
 			stringOrEmpty(tier.TierCode),
 			stringOrEmpty(tier.DisplayName),

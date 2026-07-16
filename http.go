@@ -44,9 +44,9 @@ func doJSONRaw(ctx context.Context, cfg runtimeConfig, mode authMode, method, pa
 
 	var body io.Reader
 	if payload != nil {
-		encoded, err := json.Marshal(payload)
-		if err != nil {
-			return nil, err
+		encoded, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return nil, marshalErr
 		}
 		body = bytes.NewReader(encoded)
 	}
@@ -58,15 +58,15 @@ func doJSONRaw(ctx context.Context, cfg runtimeConfig, mode authMode, method, pa
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if err := applyAuth(req, cfg, mode); err != nil {
-		return nil, err
+	if authErr := applyAuth(req, cfg, mode); authErr != nil {
+		return nil, authErr
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
@@ -112,12 +112,7 @@ func joinBaseURL(baseURL, path string) (string, error) {
 		u.Path = "/"
 	}
 	// Separate path and query string to avoid encoding the query string
-	pathPart := path
-	queryPart := ""
-	if idx := strings.Index(path, "?"); idx >= 0 {
-		pathPart = path[:idx]
-		queryPart = path[idx+1:]
-	}
+	pathPart, queryPart, _ := strings.Cut(path, "?")
 	u.Path = strings.TrimRight(u.Path, "/") + pathPart
 	if queryPart != "" {
 		u.RawQuery = queryPart

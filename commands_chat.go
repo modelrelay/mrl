@@ -150,7 +150,7 @@ func runStreamWithUsage(ctx context.Context, client *sdk.Client, model, system s
 	if err != nil {
 		return err
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	var finalModel sdk.ModelID
 	var finalUsage *sdk.Usage

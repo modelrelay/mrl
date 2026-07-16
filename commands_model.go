@@ -61,11 +61,11 @@ func newModelListCmd() *cobra.Command {
 			models := resp.Models
 			if !includeDeprecated {
 				filtered := make([]generated.Model, 0, len(models))
-				for _, model := range models {
-					if model.Deprecated {
+				for index := range models {
+					if models[index].Deprecated {
 						continue
 					}
-					filtered = append(filtered, model)
+					filtered = append(filtered, models[index])
 				}
 				models = filtered
 			}
@@ -87,9 +87,10 @@ func newModelListCmd() *cobra.Command {
 
 func printModelsTable(models []generated.Model) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "PROVIDER\tMODEL\tDISPLAY_NAME\tCTX\tMAX_OUT\tDEPRECATED")
-	for _, model := range models {
-		fmt.Fprintf(
+	_, _ = fmt.Fprintln(w, "PROVIDER\tMODEL\tDISPLAY_NAME\tCTX\tMAX_OUT\tDEPRECATED")
+	for index := range models {
+		model := &models[index]
+		_, _ = fmt.Fprintf(
 			w,
 			"%s\t%s\t%s\t%d\t%d\t%t\n",
 			model.Provider,

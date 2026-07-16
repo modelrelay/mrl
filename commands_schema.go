@@ -75,7 +75,7 @@ func readSchemaInput(path string) (json.RawMessage, error) {
 		}
 		return json.RawMessage(raw), nil
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // schema path is explicitly selected by the CLI user
 	if err != nil {
 		return nil, err
 	}

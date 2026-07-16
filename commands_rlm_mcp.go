@@ -62,8 +62,8 @@ func resolveLocalDefaultSource(sources []rlmrunner.DataSourceSpec, existing, ove
 			return "", errors.New("--default-source is required when multiple data sources are mounted")
 		}
 	}
-	for _, source := range sources {
-		if source.Name == requested {
+	for index := range sources {
+		if sources[index].Name == requested {
 			return requested, nil
 		}
 	}
@@ -89,7 +89,7 @@ func loadLocalMCPMounts(paths []string) (localMCPMounts, error) {
 		if path == "" {
 			return localMCPMounts{}, errors.New("--mcp-config requires a file path")
 		}
-		file, err := os.Open(path)
+		file, err := os.Open(path) //nolint:gosec // config paths are explicitly selected by the CLI user
 		if err != nil {
 			return localMCPMounts{}, fmt.Errorf("--mcp-config %q: %w", path, err)
 		}
@@ -107,11 +107,11 @@ func loadLocalMCPMounts(paths []string) (localMCPMounts, error) {
 		var envelope localMCPConfigFile
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&envelope); err != nil {
-			return localMCPMounts{}, fmt.Errorf("--mcp-config %q: %w", path, err)
+		if decodeErr := decoder.Decode(&envelope); decodeErr != nil {
+			return localMCPMounts{}, fmt.Errorf("--mcp-config %q: %w", path, decodeErr)
 		}
-		if err := requireJSONEOF(decoder); err != nil {
-			return localMCPMounts{}, fmt.Errorf("--mcp-config %q: %w", path, err)
+		if eofErr := requireJSONEOF(decoder); eofErr != nil {
+			return localMCPMounts{}, fmt.Errorf("--mcp-config %q: %w", path, eofErr)
 		}
 		name := strings.TrimSpace(envelope.Name)
 		if !validMCPSourceName(name) {

@@ -58,7 +58,7 @@ func loadSnowflakeEdgeConfig(path string) (snowflakeEdgeConfig, error) {
 	if err != nil {
 		return snowflakeEdgeConfig{}, fmt.Errorf("open Snowflake Edge config: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var config snowflakeEdgeConfig
 	decoder := json.NewDecoder(io.LimitReader(file, 1<<20))
 	decoder.DisallowUnknownFields()
@@ -67,7 +67,7 @@ func loadSnowflakeEdgeConfig(path string) (snowflakeEdgeConfig, error) {
 	}
 	var trailing any
 	if decoder.Decode(&trailing) != io.EOF {
-		return snowflakeEdgeConfig{}, errors.New("Snowflake Edge config must contain one JSON object")
+		return snowflakeEdgeConfig{}, errors.New("snowflake edge config must contain one JSON object")
 	}
 	if err := config.validate(); err != nil {
 		return snowflakeEdgeConfig{}, err
@@ -99,12 +99,17 @@ func newSnowflakeServeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer connector.Close()
-			listener, err := net.Listen("tcp", listenAddress)
+			defer func() {
+				if closeErr := connector.Close(); closeErr != nil {
+					log.Printf("warning: close Snowflake connector: %v", closeErr)
+				}
+			}()
+			var listenConfig net.ListenConfig
+			listener, err := listenConfig.Listen(cmd.Context(), "tcp", listenAddress)
 			if err != nil {
 				return fmt.Errorf("listen for Snowflake Edge broker: %w", err)
 			}
-			defer listener.Close()
+			defer func() { _ = listener.Close() }()
 			server := newSnowflakeHTTPServer(listener.Addr().String(), token, config, connector)
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
@@ -146,7 +151,11 @@ func newSnowflakeTestConnectionCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer connector.Close()
+			defer func() {
+				if closeErr := connector.Close(); closeErr != nil {
+					log.Printf("warning: close Snowflake connector: %v", closeErr)
+				}
+			}()
 			state, err := connector.TestConnection(cmd.Context())
 			if err != nil {
 				return err
@@ -173,7 +182,11 @@ func newSnowflakeSchemaCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer connector.Close()
+			defer func() {
+				if closeErr := connector.Close(); closeErr != nil {
+					log.Printf("warning: close Snowflake connector: %v", closeErr)
+				}
+			}()
 			schema, err := connector.Schema(cmd.Context(), snowflakesource.QueryMetadata{TenantID: config.TenantID, Source: config.SourceID})
 			if err != nil {
 				return err

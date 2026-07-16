@@ -162,11 +162,11 @@ func buildRLMFileAttachments(paths []string, overrideMime string, stdin io.Reade
 }
 
 func readFileSample(path string) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // attachment path is explicitly selected by the CLI user
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	buf := make([]byte, 512)
 	n, err := f.Read(buf)
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -180,7 +180,7 @@ func writeStdinToTempFile(stdin io.Reader, dir string, textInlineLimit int64) (s
 	if err != nil {
 		return "", 0, nil, "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var (
 		size   int64
@@ -242,7 +242,7 @@ func maybeReadInlineText(path string, mime llm.MimeType, size int64, textInlineL
 	if !isTextMime(mime) {
 		return "", nil
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // context path is the CLI-owned temporary attachment
 	if err != nil {
 		return "", err
 	}

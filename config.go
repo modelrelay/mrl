@@ -29,7 +29,7 @@ type cliProfile struct {
 func loadCLIConfig() (cliConfig, error) {
 	path, err := defaultConfigPath()
 	if err != nil {
-		return cliConfig{}, nil
+		return cliConfig{}, err
 	}
 	return readCLIConfig(path)
 }
@@ -51,7 +51,7 @@ func readCLIConfig(path string) (cliConfig, error) {
 	if strings.TrimSpace(path) == "" {
 		return cliConfig{}, nil
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // path is the user's standard or explicitly configured mrl config
 	if err != nil {
 		if os.IsNotExist(err) {
 			return cliConfig{}, nil
@@ -79,15 +79,18 @@ func writeCLIConfig(cfg cliConfig) error {
 	if cfg.Profiles == nil {
 		cfg.Profiles = map[string]cliProfile{}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+	if mkdirErr := os.MkdirAll(filepath.Dir(path), 0o700); mkdirErr != nil {
+		return mkdirErr
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // path is the user's mrl config destination
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return toml.NewEncoder(f).Encode(cfg)
+	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func resolveProfileName(flagValue string, cfg cliConfig) string {
