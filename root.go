@@ -78,6 +78,7 @@ Examples:
 		newTierCmd(),
 		newAgentCmd(),
 		newModelCmd(),
+		newResponseCmd(),
 		newSchemaCmd(),
 		newVersionCmd(),
 		newDoCmd(),
