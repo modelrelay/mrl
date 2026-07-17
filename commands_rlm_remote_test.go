@@ -98,14 +98,15 @@ func TestValidateRLMRemoteAttachments_RejectsMissingText(t *testing.T) {
 	}
 }
 
-func TestDoRLMLeaseJSONUsesSupportedRESTBoundary(t *testing.T) {
+func TestDoRLMLeaseJSONUsesOneCustomerAuthority(t *testing.T) {
 	t.Parallel()
 
-	var gotPath, gotKey, gotClient string
+	var gotPath, gotKey, gotClient, gotCustomer string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotKey = r.Header.Get("X-ModelRelay-Api-Key")
 		gotClient = r.Header.Get("X-ModelRelay-Client")
+		gotCustomer = r.Header.Get("X-ModelRelay-Customer-Id")
 		var request rlmLeaseResolutionRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode request: %v", err)
@@ -122,13 +123,48 @@ func TestDoRLMLeaseJSONUsesSupportedRESTBoundary(t *testing.T) {
 			Selector string `json:"selector"`
 		} `json:"profile"`
 	}
-	if err := doRLMLeaseJSON(t.Context(), server.Client(), server.URL, sdk.SecretKey("mr_sk_test"), http.MethodPost, "/rlm/executions/resolve", rlmLeaseResolutionRequest{Model: "preset:test"}, &response); err != nil {
+	if err := doRLMLeaseJSON(t.Context(), server.Client(), server.URL, rlmTestProjectAuthority("customer-123"), http.MethodPost, "/rlm/executions/resolve", rlmLeaseResolutionRequest{Model: "preset:test"}, &response); err != nil {
 		t.Fatalf("doRLMLeaseJSON: %v", err)
 	}
-	if gotPath != "/rlm/executions/resolve" || gotKey != "mr_sk_test" || gotClient == "" {
-		t.Fatalf("request path/key/client = %q/%q/%q", gotPath, gotKey, gotClient)
+	if gotPath != "/rlm/executions/resolve" || gotKey != "mr_sk_test" || gotClient == "" || gotCustomer != "customer-123" {
+		t.Fatalf("request path/key/client/customer = %q/%q/%q/%q", gotPath, gotKey, gotClient, gotCustomer)
 	}
 	if response.Profile.Selector != "preset:test" {
 		t.Fatalf("response selector = %q", response.Profile.Selector)
+	}
+}
+
+func TestNewRLMLeaseAuthority_RequiresProjectKeyAndCustomerScope(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		config   runtimeConfig
+		customer string
+		wantErr  string
+	}{
+		{name: "project key with explicit scope", config: runtimeConfig{APIKey: "mr_sk_test"}, customer: " customer-123 "},
+		{name: "project key missing scope", config: runtimeConfig{APIKey: "mr_sk_test"}, wantErr: "--customer is required"},
+		{name: "account token is not a customer token", config: runtimeConfig{Token: "account-token"}, wantErr: "project API key required"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			authority, err := newRLMLeaseAuthority(tt.config, tt.customer)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("newRLMLeaseAuthority: %v", err)
+			}
+			if authority.apiKey == nil || authority.apiKey.String() != "mr_sk_test" {
+				t.Fatalf("api key = %v", authority.apiKey)
+			}
+			if authority.customerExternalID != "customer-123" {
+				t.Fatalf("customer scope = %q", authority.customerExternalID)
+			}
+		})
 	}
 }

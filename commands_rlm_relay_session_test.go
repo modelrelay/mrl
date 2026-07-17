@@ -44,6 +44,9 @@ fi
 		mu.Lock()
 		defer mu.Unlock()
 		requestPath = append(requestPath, request.URL.Path)
+		if got := request.Header.Get("X-ModelRelay-Customer-Id"); got != "customer-123" {
+			t.Errorf("%s customer scope = %q, want customer-123", request.URL.Path, got)
+		}
 		switch request.URL.Path {
 		case "/rlm/executions/resolve":
 			writeRelaySessionJSON(t, w, rlmLeaseResolutionResponse{
@@ -71,7 +74,7 @@ fi
 
 	err := runRLMRelaySession(
 		t.Context(), runtimeConfig{BaseURL: server.URL, Output: outputFormatJSON},
-		sdk.SecretKey("mr_sk_test"), "preset:test", "question", rlm.ContextPlan{},
+		rlmTestProjectAuthority("customer-123"), "preset:test", "question", rlm.ContextPlan{},
 		&rlmFlags{pythonPath: pythonPath},
 	)
 	if err != nil {
@@ -130,7 +133,7 @@ exit 1
 
 	err := runRLMRelaySession(
 		t.Context(), runtimeConfig{BaseURL: server.URL, Output: outputFormatJSON},
-		sdk.SecretKey("mr_sk_test"), "preset:test", "question", rlm.ContextPlan{},
+		rlmTestProjectAuthority("customer-123"), "preset:test", "question", rlm.ContextPlan{},
 		&rlmFlags{pythonPath: pythonPath},
 	)
 	if err == nil || !strings.Contains(err.Error(), "preflight local Droste") {
@@ -207,7 +210,7 @@ fi
 			<-start
 			errorsByRun <- runRLMRelaySession(
 				t.Context(), runtimeConfig{BaseURL: server.URL, Output: outputFormatJSON},
-				sdk.SecretKey("mr_sk_test"), "preset:test", "question", rlm.ContextPlan{},
+				rlmTestProjectAuthority("customer-123"), "preset:test", "question", rlm.ContextPlan{},
 				&rlmFlags{pythonPath: pythonPath},
 			)
 		}()
@@ -234,6 +237,10 @@ fi
 	if len(correlationIDs) != len(requestScriptLogs) {
 		t.Fatalf("concurrent preflight request IDs = %v, want one unique ID per invocation", correlationIDs)
 	}
+}
+
+func rlmTestProjectAuthority(customerExternalID string) rlmLeaseAuthority {
+	return rlmLeaseAuthority{apiKey: sdk.SecretKey("mr_sk_test"), customerExternalID: customerExternalID}
 }
 
 func testRelaySessionProfile() rlmprofile.ResolvedExecution {

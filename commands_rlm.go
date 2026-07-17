@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	platformheaders "github.com/modelrelay/modelrelay/platform/headers"
 	"github.com/modelrelay/modelrelay/platform/postgressource"
 	"github.com/modelrelay/modelrelay/platform/rlm"
 	"github.com/modelrelay/modelrelay/platform/rlmprofile"
@@ -62,6 +63,7 @@ func newRLMCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&flags.remote, "remote", false, "Run RLM on ModelRelay (/rlm/execute) instead of local Python")
 	cmd.Flags().BoolVar(&flags.stream, "stream", false, "Stream hosted RLM events as canonical NDJSON (requires --remote)")
 	cmd.Flags().BoolVar(&flags.relaySession, "relay-session", false, "Run local Droste with a durable ModelRelay execution lease")
+	cmd.Flags().StringVar(&flags.customer, "customer", "", "External customer ID for --relay-session with a project API key")
 	cmd.Flags().StringVar(&flags.db, "db", "", "SQLite database file to expose as a read-only SQL data source")
 	cmd.Flags().StringVar(&flags.postgresDSNEnv, "postgres-dsn-env", "", "Environment variable containing a PostgreSQL DSN for a trusted read-only edge connector")
 	cmd.Flags().StringVar(&flags.snowflakeBrokerURL, "snowflake-broker-url", "", "URL of a trusted ModelRelay Edge for Snowflake broker")
@@ -97,6 +99,7 @@ type rlmFlags struct {
 	remote                  bool
 	stream                  bool
 	relaySession            bool
+	customer                string
 	db                      string
 	postgresDSNEnv          string
 	snowflakeBrokerURL      string
@@ -194,6 +197,9 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 	if flags.remote && flags.relaySession {
 		return errors.New("--remote and --relay-session are mutually exclusive")
 	}
+	if strings.TrimSpace(flags.customer) != "" && !flags.relaySession {
+		return errors.New("--customer requires --relay-session")
+	}
 	if flags.remote {
 		if validationErr := validateRLMRemoteAttachments(files); validationErr != nil {
 			return validationErr
@@ -207,10 +213,11 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 	}
 
 	var (
-		client *sdk.Client
-		apiKey sdk.APIKeyAuth
+		client         *sdk.Client
+		apiKey         sdk.APIKeyAuth
+		relayAuthority rlmLeaseAuthority
 	)
-	if flags.remote || flags.relaySession {
+	if flags.remote {
 		if strings.TrimSpace(cfg.APIKey) == "" {
 			return errors.New("api key required")
 		}
@@ -218,8 +225,14 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 		if err != nil {
 			return err
 		}
-	} else {
+	} else if !flags.relaySession {
 		client, err = newPromptClient(cfg)
+		if err != nil {
+			return err
+		}
+	}
+	if flags.relaySession {
+		relayAuthority, err = newRLMLeaseAuthority(cfg, flags.customer)
 		if err != nil {
 			return err
 		}
@@ -287,7 +300,7 @@ func runRLM(cmd *cobra.Command, args []string, flags *rlmFlags) error {
 		if strings.TrimSpace(flags.db) != "" || strings.TrimSpace(flags.postgresDSNEnv) != "" || strings.TrimSpace(flags.snowflakeBrokerURL) != "" || len(flags.mcpConfigs) > 0 {
 			return errors.New("--relay-session currently supports message/context workloads only; SQL and MCP transports remain local-mode only")
 		}
-		return runRLMRelaySession(ctx, cfg, apiKey, model, strings.Join(args, " "), plan, flags)
+		return runRLMRelaySession(ctx, cfg, relayAuthority, model, strings.Join(args, " "), plan, flags)
 	}
 
 	if flags.remote {
@@ -1398,9 +1411,41 @@ func (id rlmPreflightCorrelationID) requestID() string {
 	return "preflight-" + string(id)
 }
 
-func runRLMRelaySession(ctx context.Context, cfg runtimeConfig, apiKey sdk.APIKeyAuth, model, query string, plan rlm.ContextPlan, flags *rlmFlags) error {
+type rlmLeaseAuthority struct {
+	apiKey             sdk.APIKeyAuth
+	customerExternalID string
+}
+
+func newRLMLeaseAuthority(cfg runtimeConfig, customerExternalID string) (rlmLeaseAuthority, error) {
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		return rlmLeaseAuthority{}, errors.New("project API key required for --relay-session")
+	}
+	customerExternalID = strings.TrimSpace(customerExternalID)
+	if customerExternalID == "" {
+		return rlmLeaseAuthority{}, errors.New("--customer is required for --relay-session with a project API key")
+	}
+	key, err := sdk.ParseAPIKeyAuth(cfg.APIKey)
+	if err != nil {
+		return rlmLeaseAuthority{}, err
+	}
+	return rlmLeaseAuthority{apiKey: key, customerExternalID: customerExternalID}, nil
+}
+
+func applyRLMLeaseAuthority(req *http.Request, authority rlmLeaseAuthority) error {
+	if authority.apiKey == nil || strings.TrimSpace(authority.apiKey.String()) == "" {
+		return errors.New("invalid relay-session authentication")
+	}
+	if strings.TrimSpace(authority.customerExternalID) == "" {
+		return errors.New("invalid relay-session customer scope")
+	}
+	req.Header.Set(platformheaders.APIKey, authority.apiKey.String())
+	req.Header.Set(platformheaders.CustomerID, authority.customerExternalID)
+	return nil
+}
+
+func runRLMRelaySession(ctx context.Context, cfg runtimeConfig, authority rlmLeaseAuthority, model, query string, plan rlm.ContextPlan, flags *rlmFlags) error {
 	var resolution rlmLeaseResolutionResponse
-	if err := doRLMLeaseJSON(ctx, nil, cfg.BaseURL, apiKey, http.MethodPost, "/rlm/executions/resolve", rlmLeaseResolutionRequest{
+	if err := doRLMLeaseJSON(ctx, nil, cfg.BaseURL, authority, http.MethodPost, "/rlm/executions/resolve", rlmLeaseResolutionRequest{
 		Model: model, Seed: flags.seed,
 	}, &resolution); err != nil {
 		return fmt.Errorf("resolve RLM execution lease: %w", err)
@@ -1495,7 +1540,7 @@ func runRLMRelaySession(ctx context.Context, cfg runtimeConfig, apiKey sdk.APIKe
 		return fmt.Errorf("local Droste preflight returned no scaffold manifest (correlation_id=%s)", preflightCorrelationID)
 	}
 	var lease rlmLeaseCreateResponse
-	if err := doRLMLeaseJSON(ctx, nil, cfg.BaseURL, apiKey, http.MethodPost, "/rlm/executions", rlmLeaseCreateRequest{
+	if err := doRLMLeaseJSON(ctx, nil, cfg.BaseURL, authority, http.MethodPost, "/rlm/executions", rlmLeaseCreateRequest{
 		Model: model, Seed: flags.seed, ScaffoldManifest: preflight.Preflight.ScaffoldManifest,
 		ExpectedRevisionID:           profile.RevisionID,
 		ExpectedRevisionContentHash:  profile.RevisionContentHash,
@@ -1511,7 +1556,7 @@ func runRLMRelaySession(ctx context.Context, cfg runtimeConfig, apiKey sdk.APIKe
 	finalizeLease := func() error {
 		finalizeCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		return doRLMLeaseJSON(finalizeCtx, nil, baseURL, apiKey, http.MethodPost, "/rlm/executions/"+url.PathEscape(lease.ExecutionID)+"/finalize", struct{}{}, &executionEvidence)
+		return doRLMLeaseJSON(finalizeCtx, nil, baseURL, authority, http.MethodPost, "/rlm/executions/"+url.PathEscape(lease.ExecutionID)+"/finalize", struct{}{}, &executionEvidence)
 	}
 	if lease.MaxSettledSpendCents != resolution.MaxSettledSpendCents {
 		if finalizeErr := finalizeLease(); finalizeErr != nil {
@@ -1541,7 +1586,7 @@ func runRLMRelaySession(ctx context.Context, cfg runtimeConfig, apiKey sdk.APIKe
 	return writeRLMLocalOutcomeWithEvidenceTo(os.Stdout, cfg, nil, runResult.Response, nil, &executionEvidence)
 }
 
-func doRLMLeaseJSON(ctx context.Context, httpClient *http.Client, baseURL string, apiKey sdk.APIKeyAuth, method, path string, requestBody, responseBody any) error {
+func doRLMLeaseJSON(ctx context.Context, httpClient *http.Client, baseURL string, authority rlmLeaseAuthority, method, path string, requestBody, responseBody any) error {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		return errors.New("base URL is required")
@@ -1555,8 +1600,8 @@ func doRLMLeaseJSON(ctx context.Context, httpClient *http.Client, baseURL string
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if apiKey != nil && strings.TrimSpace(apiKey.String()) != "" {
-		req.Header.Set("X-ModelRelay-Api-Key", apiKey.String())
+	if authorityErr := applyRLMLeaseAuthority(req, authority); authorityErr != nil {
+		return authorityErr
 	}
 	if header := strings.TrimSpace(clientHeader()); header != "" {
 		req.Header.Set("X-ModelRelay-Client", header)

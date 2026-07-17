@@ -223,6 +223,9 @@ lease. This resolves an immutable tier profile, performs local scaffold
 preflight, uses short-lived server-budgeted callbacks, and finalizes immutable
 content-free evidence. The CLI also verifies that the authoritative whole-cent
 settled-spend ceiling is unchanged between resolution and lease creation. It
+requires a project API key plus `--customer <external-id>` and reuses that one
+customer authority for resolve, create, and finalize. The CLI's `--token` is an
+account-login token and is not accepted as customer scope for this command. It
 currently targets message/context testing; SQL and
 MCP transports remain in ordinary local mode.
 With `--json`, the finalized `execution_evidence` includes typed root and
@@ -251,6 +254,7 @@ Flags:
 | `--sql-profile` | SQL profile ID for the read-only policy (default: permissive read-only) |
 | `--remote` | Run hosted RLM via `/rlm/execute` instead of local Python |
 | `--relay-session` | Run local Droste with a durable ModelRelay execution lease |
+| `--customer` | External customer ID required by `--relay-session` with a project API key |
 
 JSON output reports `iterations` as a diagnostic. `trajectory` is a typed
 availability fact and is `unavailable` under the default no-content-retention
