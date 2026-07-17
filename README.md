@@ -225,6 +225,8 @@ content-free evidence. The CLI also verifies that the authoritative whole-cent
 settled-spend ceiling is unchanged between resolution and lease creation. It
 currently targets message/context testing; SQL and
 MCP transports remain in ordinary local mode.
+With `--json`, the finalized `execution_evidence` includes typed root and
+subcall provider-returned model facts alongside the content-free accounting.
 If you need large or binary files, use local mode.
 
 Flags:

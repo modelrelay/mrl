@@ -27,6 +27,7 @@ import (
 	"github.com/modelrelay/modelrelay/platform/rlmrunner"
 	"github.com/modelrelay/modelrelay/platform/workflow"
 	sdk "github.com/modelrelay/modelrelay/sdk/go"
+	generated "github.com/modelrelay/modelrelay/sdk/go/generated"
 	"github.com/modelrelay/modelrelay/sdk/go/llm"
 	"github.com/spf13/cobra"
 )
@@ -486,15 +487,16 @@ type rlmJSONError struct {
 // rlmJSONResult is the stdout envelope for `mrl rlm --json` (success and failure).
 // On failure Error is set and the process still exits non-zero.
 type rlmJSONResult struct {
-	Answer             json.RawMessage         `json:"answer,omitempty"`
-	Iterations         int                     `json:"iterations"`
-	Subcalls           int                     `json:"subcalls"`
-	DataSourceRequests *int                    `json:"data_source_requests,omitempty"`
-	TotalUsage         workflow.TokenUsage     `json:"total_usage,omitempty"`
-	Trajectory         workflow.RLMContentFact `json:"trajectory"`
-	Ready              bool                    `json:"ready"`
-	Extracted          bool                    `json:"extracted,omitempty"`
-	Error              *rlmJSONError           `json:"error,omitempty"`
+	Answer             json.RawMessage                          `json:"answer,omitempty"`
+	Iterations         int                                      `json:"iterations"`
+	Subcalls           int                                      `json:"subcalls"`
+	DataSourceRequests *int                                     `json:"data_source_requests,omitempty"`
+	TotalUsage         workflow.TokenUsage                      `json:"total_usage,omitempty"`
+	Trajectory         workflow.RLMContentFact                  `json:"trajectory"`
+	Ready              bool                                     `json:"ready"`
+	Extracted          bool                                     `json:"extracted,omitempty"`
+	Error              *rlmJSONError                            `json:"error,omitempty"`
+	ExecutionEvidence  *generated.RLMRetrievedExecutionEvidence `json:"execution_evidence,omitempty"`
 }
 
 func buildRLMJSONResult(usage *rlmUsage, resp rlmrunner.RunnerResponse, runErr error) (rlmJSONResult, error) {
@@ -542,6 +544,10 @@ func writeRLMLocalOutcome(cfg runtimeConfig, usage *rlmUsage, resp rlmrunner.Run
 }
 
 func writeRLMLocalOutcomeTo(w io.Writer, cfg runtimeConfig, usage *rlmUsage, resp rlmrunner.RunnerResponse, runErr error) error {
+	return writeRLMLocalOutcomeWithEvidenceTo(w, cfg, usage, resp, runErr, nil)
+}
+
+func writeRLMLocalOutcomeWithEvidenceTo(w io.Writer, cfg runtimeConfig, usage *rlmUsage, resp rlmrunner.RunnerResponse, runErr error, evidence *generated.RLMRetrievedExecutionEvidence) error {
 	if cfg.Output == outputFormatJSON {
 		result, err := buildRLMJSONResult(usage, resp, runErr)
 		if err != nil {
@@ -550,6 +556,7 @@ func writeRLMLocalOutcomeTo(w io.Writer, cfg runtimeConfig, usage *rlmUsage, res
 			}
 			return err
 		}
+		result.ExecutionEvidence = evidence
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(result); err != nil {
@@ -1500,10 +1507,11 @@ func runRLMRelaySession(ctx context.Context, cfg runtimeConfig, apiKey sdk.APIKe
 		return errors.New("RLM execution lease response is incomplete")
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
+	var executionEvidence generated.RLMRetrievedExecutionEvidence
 	finalizeLease := func() error {
 		finalizeCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		return doRLMLeaseJSON(finalizeCtx, nil, baseURL, apiKey, http.MethodPost, "/rlm/executions/"+url.PathEscape(lease.ExecutionID)+"/finalize", struct{}{}, nil)
+		return doRLMLeaseJSON(finalizeCtx, nil, baseURL, apiKey, http.MethodPost, "/rlm/executions/"+url.PathEscape(lease.ExecutionID)+"/finalize", struct{}{}, &executionEvidence)
 	}
 	if lease.MaxSettledSpendCents != resolution.MaxSettledSpendCents {
 		if finalizeErr := finalizeLease(); finalizeErr != nil {
@@ -1528,9 +1536,9 @@ func runRLMRelaySession(ctx context.Context, cfg runtimeConfig, apiKey sdk.APIKe
 		return fmt.Errorf("finalize RLM execution lease: %w", finalizeErr)
 	}
 	if runErr != nil {
-		return writeRLMLocalOutcome(cfg, nil, runResult.Response, runErr)
+		return writeRLMLocalOutcomeWithEvidenceTo(os.Stdout, cfg, nil, runResult.Response, runErr, &executionEvidence)
 	}
-	return writeRLMLocalOutcome(cfg, nil, runResult.Response, nil)
+	return writeRLMLocalOutcomeWithEvidenceTo(os.Stdout, cfg, nil, runResult.Response, nil, &executionEvidence)
 }
 
 func doRLMLeaseJSON(ctx context.Context, httpClient *http.Client, baseURL string, apiKey sdk.APIKeyAuth, method, path string, requestBody, responseBody any) error {

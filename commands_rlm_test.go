@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelrelay/modelrelay/platform/rlm"
 	"github.com/modelrelay/modelrelay/platform/rlmrunner"
+	generated "github.com/modelrelay/modelrelay/sdk/go/generated"
 )
 
 func TestBuildRLMSystemAdditions_IncludesLimits(t *testing.T) {
@@ -152,6 +153,36 @@ func TestWriteRLMLocalOutcomeTo_JSONEmitsOnFailure(t *testing.T) {
 	}
 	if decoded.Trajectory.Availability != "unavailable" {
 		t.Fatalf("decoded trajectory = %+v", decoded.Trajectory)
+	}
+}
+
+func TestWriteRLMLocalOutcomeWithEvidenceTo_JSONIncludesReturnedModelFacts(t *testing.T) {
+	t.Parallel()
+
+	rootValue := "provider/root-v1"
+	missing := generated.RLMReturnedModelFactReason("missing_observation")
+	evidence := &generated.RLMRetrievedExecutionEvidence{
+		Version: generated.ModelrelayRlmExecutionEvidenceViewV2,
+		RootReturnedModel: generated.RLMReturnedModelFact{
+			Availability: generated.RLMReturnedModelFactAvailability("available"), Value: &rootValue,
+		},
+		SubcallReturnedModel: generated.RLMReturnedModelFact{
+			Availability: generated.RLMReturnedModelFactAvailability("unavailable"), Reason: &missing,
+		},
+	}
+	var buf bytes.Buffer
+	if err := writeRLMLocalOutcomeWithEvidenceTo(&buf, runtimeConfig{Output: outputFormatJSON}, nil,
+		rlmrunner.RunnerResponse{Answer: "answer", Ready: true}, nil, evidence); err != nil {
+		t.Fatal(err)
+	}
+	var result rlmJSONResult
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ExecutionEvidence == nil || result.ExecutionEvidence.Version != generated.ModelrelayRlmExecutionEvidenceViewV2 ||
+		result.ExecutionEvidence.RootReturnedModel.Value == nil || *result.ExecutionEvidence.RootReturnedModel.Value != rootValue ||
+		result.ExecutionEvidence.SubcallReturnedModel.Reason == nil || *result.ExecutionEvidence.SubcallReturnedModel.Reason != missing {
+		t.Fatalf("execution evidence lost returned-model facts: %+v", result.ExecutionEvidence)
 	}
 }
 

@@ -62,7 +62,7 @@ fi
 				MaxSettledSpendCents: 100,
 			})
 		case "/rlm/executions/execution-1/finalize":
-			w.WriteHeader(http.StatusNoContent)
+			writeRelaySessionJSON(t, w, map[string]any{})
 		default:
 			http.Error(w, "unexpected path", http.StatusNotFound)
 		}
@@ -193,7 +193,7 @@ fi
 				MaxSettledSpendCents: 100,
 			})
 		case "/rlm/executions/execution-1/finalize", "/rlm/executions/execution-2/finalize":
-			w.WriteHeader(http.StatusNoContent)
+			writeRelaySessionJSON(t, w, map[string]any{})
 		default:
 			http.Error(w, "unexpected path", http.StatusNotFound)
 		}
