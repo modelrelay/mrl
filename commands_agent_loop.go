@@ -191,6 +191,9 @@ func runAgentLoop(cmd *cobra.Command, args []string, flags *agentLoopFlags) erro
 		usage.InputTokens += resp.Usage.InputTokens
 		usage.OutputTokens += resp.Usage.OutputTokens
 		usage.TotalTokens += resp.Usage.TotalTokens
+		usage.ReasoningTokens += resp.Usage.ReasoningTokens
+		usage.CacheReadInputTokens += resp.Usage.CacheReadInputTokens
+		usage.CacheWriteInputTokens += resp.Usage.CacheWriteInputTokens
 
 		toolCalls := resp.ToolCalls()
 		if len(toolCalls) == 0 {

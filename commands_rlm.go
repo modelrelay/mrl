@@ -148,6 +148,8 @@ func (u *rlmUsage) add(usage sdk.Usage) {
 	u.usage.InputTokens += usage.InputTokens
 	u.usage.OutputTokens += usage.OutputTokens
 	u.usage.TotalTokens += usage.TotalTokens
+	u.usage.CacheReadInputTokens += usage.CacheReadInputTokens
+	u.usage.CacheWriteInputTokens += usage.CacheWriteInputTokens
 }
 
 func (u *rlmUsage) snapshot() workflow.TokenUsage {
@@ -1204,9 +1206,11 @@ type localRootRequest struct {
 }
 
 type localRootUsage struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
-	TotalTokens  int64 `json:"total_tokens"`
+	InputTokens           int64 `json:"input_tokens"`
+	OutputTokens          int64 `json:"output_tokens"`
+	TotalTokens           int64 `json:"total_tokens"`
+	CacheReadInputTokens  int64 `json:"cache_read_input_tokens"`
+	CacheWriteInputTokens int64 `json:"cache_write_input_tokens"`
 }
 
 type localRootResponse struct {
@@ -1301,8 +1305,11 @@ func (h *localRootHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload := localRootResponse{
-		Result:     text,
-		Usage:      localRootUsage{InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens, TotalTokens: resp.Usage.TotalTokens},
+		Result: text,
+		Usage: localRootUsage{
+			InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens, TotalTokens: resp.Usage.TotalTokens,
+			CacheReadInputTokens: resp.Usage.CacheReadInputTokens, CacheWriteInputTokens: resp.Usage.CacheWriteInputTokens,
+		},
 		Provider:   resp.Provider,
 		ResponseID: resp.ID,
 		StopReason: string(resp.StopReason),

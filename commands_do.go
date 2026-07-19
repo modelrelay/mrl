@@ -150,6 +150,9 @@ When writing git commits:
 		usage.InputTokens += resp.Usage.InputTokens
 		usage.OutputTokens += resp.Usage.OutputTokens
 		usage.TotalTokens += resp.Usage.TotalTokens
+		usage.ReasoningTokens += resp.Usage.ReasoningTokens
+		usage.CacheReadInputTokens += resp.Usage.CacheReadInputTokens
+		usage.CacheWriteInputTokens += resp.Usage.CacheWriteInputTokens
 
 		toolCalls := resp.ToolCalls()
 		if len(toolCalls) == 0 {
