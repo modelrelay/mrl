@@ -20,7 +20,7 @@ func rlmStreamTestFrame(runID, parentRunID, eventType string, sequence, depth in
 		parent = fmt.Sprintf(`, "parent_run_id": %q`, parentRunID)
 	}
 	return fmt.Sprintf(
-		`{ "run_id": %q%s, "type": %q, "seq": %d, "depth": %d, "version": 2 }`,
+		`{ "run_id": %q%s, "type": %q, "seq": %d, "depth": %d, "version": 4 }`,
 		runID, parent, eventType, sequence, depth,
 	)
 }

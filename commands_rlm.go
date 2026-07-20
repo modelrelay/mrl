@@ -1372,9 +1372,9 @@ type rlmLeaseResolutionRequest struct {
 }
 
 type rlmLeaseResolutionResponse struct {
-	Profile              rlmprofile.ResolvedExecution `json:"profile"`
-	RootArtifact         *rlmprofile.RootArtifact     `json:"root_artifact,omitempty"`
-	MaxSettledSpendCents int64                        `json:"max_settled_spend_cents"`
+	Profile                   rlmprofile.ResolvedExecution `json:"profile"`
+	RootArtifact              *rlmprofile.RootArtifact     `json:"root_artifact,omitempty"`
+	MaxSettledSpendMicrocents int64                        `json:"max_settled_spend_microcents"`
 }
 
 type rlmLeaseCreateRequest struct {
@@ -1387,12 +1387,12 @@ type rlmLeaseCreateRequest struct {
 }
 
 type rlmLeaseCreateResponse struct {
-	ExecutionID          string    `json:"execution_id"`
-	Credential           string    `json:"credential"`
-	ExecutionDeadline    time.Time `json:"execution_deadline"`
-	RootCallbackPath     string    `json:"root_callback_path"`
-	SubcallCallbackPath  string    `json:"subcall_callback_path"`
-	MaxSettledSpendCents int64     `json:"max_settled_spend_cents"`
+	ExecutionID               string    `json:"execution_id"`
+	Credential                string    `json:"credential"`
+	ExecutionDeadline         time.Time `json:"execution_deadline"`
+	RootCallbackPath          string    `json:"root_callback_path"`
+	SubcallCallbackPath       string    `json:"subcall_callback_path"`
+	MaxSettledSpendMicrocents int64     `json:"max_settled_spend_microcents"`
 }
 
 type rlmLeaseSampling struct {
@@ -1458,7 +1458,7 @@ func runRLMRelaySession(ctx context.Context, cfg runtimeConfig, authority rlmLea
 		return fmt.Errorf("resolve RLM execution lease: %w", err)
 	}
 	profile := resolution.Profile
-	if resolution.MaxSettledSpendCents <= 0 {
+	if resolution.MaxSettledSpendMicrocents <= 0 {
 		return errors.New("resolved RLM execution omitted authoritative spend ceiling")
 	}
 	budget, err := rlmrunner.NewBudget(
@@ -1565,7 +1565,7 @@ func runRLMRelaySession(ctx context.Context, cfg runtimeConfig, authority rlmLea
 		defer cancel()
 		return doRLMLeaseJSON(finalizeCtx, nil, baseURL, authority, http.MethodPost, "/rlm/executions/"+url.PathEscape(lease.ExecutionID)+"/finalize", struct{}{}, &executionEvidence)
 	}
-	if lease.MaxSettledSpendCents != resolution.MaxSettledSpendCents {
+	if lease.MaxSettledSpendMicrocents != resolution.MaxSettledSpendMicrocents {
 		if finalizeErr := finalizeLease(); finalizeErr != nil {
 			return fmt.Errorf("RLM execution spend ceiling changed after resolution; finalize mismatched lease: %w", finalizeErr)
 		}
@@ -1576,7 +1576,7 @@ func runRLMRelaySession(ctx context.Context, cfg runtimeConfig, authority rlmLea
 	runnerRequest.SubcallEndpoint = baseURL + lease.SubcallCallbackPath
 	runnerRequest.Session = lease.ExecutionID
 	runnerRequest.SessionIndex = 1
-	fmt.Fprintf(os.Stderr, "rlm: execution lease %s (maximum settled spend: %d cents)\n", lease.ExecutionID, lease.MaxSettledSpendCents)
+	fmt.Fprintf(os.Stderr, "rlm: execution lease %s (maximum settled spend: %d microcents)\n", lease.ExecutionID, lease.MaxSettledSpendMicrocents)
 	runResult, runErr := rlmrunner.RunCodeSession(ctx, session, runtimeDir, runnerRequest, rlmrunner.RunOptions{
 		RequestID: lease.ExecutionID, TimeoutMS: profile.Limits.TimeoutMS,
 	})

@@ -28,9 +28,9 @@ func TestRunRLMRelaySession_PreflightAndRunShareOneLocalSession(t *testing.T) {
 printf '%s\n' "$PWD" >> "$RLM_SESSION_LOG"
 if [ ! -e .preflight-complete ]; then
   touch .preflight-complete
-  printf '%s\n' '{"protocol_version":6,"operation":"preflight","status":"success","preflight":{"schema_version":1,"scaffold_manifest":{"id":"`+relaySessionScaffoldID+`","schema_version":1,"inference":{"seed":null}}},"error":null}'
+  printf '%s\n' '{"protocol_version":8,"operation":"preflight","status":"success","preflight":{"schema_version":1,"scaffold_manifest":{"id":"`+relaySessionScaffoldID+`","schema_version":2,"inference":{"seed":null}}},"error":null}'
 else
-  printf '%s\n' '{"protocol_version":6,"operation":"run","answer":"ok","ready":true,"iterations":1,"tokens_used":0,"subcalls":0,"trajectory":[]}'
+  printf '%s\n' '{"protocol_version":8,"operation":"run","answer":"ok","ready":true,"iterations":1,"tokens_used":0,"subcalls":0,"trajectory":[]}'
 fi
 `)
 	t.Setenv("RLM_SESSION_LOG", logPath)
@@ -50,8 +50,8 @@ fi
 		switch request.URL.Path {
 		case "/rlm/executions/resolve":
 			writeRelaySessionJSON(t, w, rlmLeaseResolutionResponse{
-				Profile:              testRelaySessionProfile(),
-				MaxSettledSpendCents: 100,
+				Profile:                   testRelaySessionProfile(),
+				MaxSettledSpendMicrocents: 100,
 			})
 		case "/rlm/executions":
 			createCalls++
@@ -62,7 +62,7 @@ fi
 			writeRelaySessionJSON(t, w, rlmLeaseCreateResponse{
 				ExecutionID: "execution-1", Credential: "lease-token",
 				RootCallbackPath: "/rlm/root", SubcallCallbackPath: "/rlm/subcall",
-				MaxSettledSpendCents: 100,
+				MaxSettledSpendMicrocents: 100,
 			})
 		case "/rlm/executions/execution-1/finalize":
 			writeRelaySessionJSON(t, w, map[string]any{})
@@ -120,7 +120,7 @@ exit 1
 		requestPath = append(requestPath, request.URL.Path)
 		if request.URL.Path == "/rlm/executions/resolve" {
 			writeRelaySessionJSON(t, w, rlmLeaseResolutionResponse{
-				Profile: testRelaySessionProfile(), MaxSettledSpendCents: 100,
+				Profile: testRelaySessionProfile(), MaxSettledSpendMicrocents: 100,
 			})
 			return
 		}
@@ -168,9 +168,9 @@ func TestRunRLMRelaySession_ConcurrentPreflightsUseDistinctRequestFiles(t *testi
 printf '%s\n' "$2" >> `+shellSingleQuote(logPath)+`
 if [ ! -e .preflight-complete ]; then
   touch .preflight-complete
-  printf '%s\n' '{"protocol_version":6,"operation":"preflight","status":"success","preflight":{"schema_version":1,"scaffold_manifest":{"id":"`+relaySessionScaffoldID+`","schema_version":1,"inference":{"seed":null}}},"error":null}'
+  printf '%s\n' '{"protocol_version":8,"operation":"preflight","status":"success","preflight":{"schema_version":1,"scaffold_manifest":{"id":"`+relaySessionScaffoldID+`","schema_version":2,"inference":{"seed":null}}},"error":null}'
 else
-  printf '%s\n' '{"protocol_version":6,"operation":"run","answer":"ok","ready":true,"iterations":1,"tokens_used":0,"subcalls":0,"trajectory":[]}'
+  printf '%s\n' '{"protocol_version":8,"operation":"run","answer":"ok","ready":true,"iterations":1,"tokens_used":0,"subcalls":0,"trajectory":[]}'
 fi
 `)
 	}
@@ -183,7 +183,7 @@ fi
 		switch request.URL.Path {
 		case "/rlm/executions/resolve":
 			writeRelaySessionJSON(t, w, rlmLeaseResolutionResponse{
-				Profile: testRelaySessionProfile(), MaxSettledSpendCents: 100,
+				Profile: testRelaySessionProfile(), MaxSettledSpendMicrocents: 100,
 			})
 		case "/rlm/executions":
 			mu.Lock()
@@ -193,7 +193,7 @@ fi
 			writeRelaySessionJSON(t, w, rlmLeaseCreateResponse{
 				ExecutionID: executionID, Credential: "lease-token",
 				RootCallbackPath: "/rlm/root", SubcallCallbackPath: "/rlm/subcall",
-				MaxSettledSpendCents: 100,
+				MaxSettledSpendMicrocents: 100,
 			})
 		case "/rlm/executions/execution-1/finalize", "/rlm/executions/execution-2/finalize":
 			writeRelaySessionJSON(t, w, map[string]any{})

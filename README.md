@@ -221,8 +221,8 @@ Use `--remote` to run hosted RLM on ModelRelay (`/rlm/execute`). Remote mode onl
 Use `--relay-session` to run Droste locally with a durable ModelRelay execution
 lease. This resolves an immutable tier profile, performs local scaffold
 preflight, uses short-lived server-budgeted callbacks, and finalizes immutable
-content-free evidence. The CLI also verifies that the authoritative whole-cent
-settled-spend ceiling is unchanged between resolution and lease creation. It
+content-free evidence. The CLI also verifies that the authoritative exact
+microcent settled-spend ceiling is unchanged between resolution and lease creation. It
 requires a project API key plus `--customer <external-id>` and reuses that one
 customer authority for resolve, create, and finalize. The CLI's `--token` is an
 account-login token and is not accepted as customer scope for this command. It
