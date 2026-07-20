@@ -162,7 +162,7 @@ func TestWriteRLMLocalOutcomeWithEvidenceTo_JSONIncludesReturnedModelFacts(t *te
 	rootValue := "provider/root-v1"
 	missing := generated.RLMReturnedModelFactReason("missing_observation")
 	evidence := &generated.RLMRetrievedExecutionEvidence{
-		Version: generated.ModelrelayRlmExecutionEvidenceViewV3,
+		Version: generated.ModelrelayRlmExecutionEvidenceViewV4,
 		RootReturnedModel: generated.RLMReturnedModelFact{
 			Availability: generated.RLMReturnedModelFactAvailability("available"), Value: &rootValue,
 		},
@@ -179,7 +179,7 @@ func TestWriteRLMLocalOutcomeWithEvidenceTo_JSONIncludesReturnedModelFacts(t *te
 	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.ExecutionEvidence == nil || result.ExecutionEvidence.Version != generated.ModelrelayRlmExecutionEvidenceViewV3 ||
+	if result.ExecutionEvidence == nil || result.ExecutionEvidence.Version != generated.ModelrelayRlmExecutionEvidenceViewV4 ||
 		result.ExecutionEvidence.RootReturnedModel.Value == nil || *result.ExecutionEvidence.RootReturnedModel.Value != rootValue ||
 		result.ExecutionEvidence.SubcallReturnedModel.Reason == nil || *result.ExecutionEvidence.SubcallReturnedModel.Reason != missing {
 		t.Fatalf("execution evidence lost returned-model facts: %+v", result.ExecutionEvidence)
